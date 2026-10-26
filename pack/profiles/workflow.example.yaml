@@ -1,0 +1,25 @@
+# 安装到 Unity 工程后位于 .bulings/workflow.yaml。
+# 空字符串和空数组表示未配置：工作流从工程推断，并写入开发说明，不当成硬性规范。
+
+mode: work
+model: composer-2.5
+
+docs:
+  devSpec:
+    enabled: true
+    path: Docs/AI/DevSpecs/{feature}.md
+  featureDoc:
+    enabled: true
+    path: Docs/AI/Features/{feature}.md
+
+project:
+  codeRoots: []
+  namespaces: []
+  asmdefs: []
+  ui:
+    framework: ""
+    binding: ""
+    notes: ""
+  architecture: ""
+  style: ""
+  protectedPaths: []
