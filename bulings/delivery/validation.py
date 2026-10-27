@@ -42,6 +42,22 @@ def validate_delivery(archive_path: Path, feature_id: str) -> list[DocumentError
             continue
         if suffix == "requirements.terminology":
             errors.extend(_validate_terminology(doc, body, rel))
+        project_root = archive_path.parent.parent.parent
+        if suffix == "requirements.overview" and "## 场景" in body:
+            from bulings.delivery.requirements_flow import validate_requirements_structure
+
+            for message in validate_requirements_structure(project_root, archive_path, body, for_approve=False):
+                errors.append(DocumentError(doc, "INVALID_REQUIREMENTS", message, rel.replace("\\", "/")))
+        if suffix == "investigation.overview" and "## 事实" in body:
+            from bulings.delivery.design_flow import validate_investigation_structure
+
+            for message in validate_investigation_structure(project_root, body):
+                errors.append(DocumentError(doc, "INVALID_INVESTIGATION", message, rel.replace("\\", "/")))
+        if suffix == "design.overview" and "## 变化" in body:
+            from bulings.delivery.design_flow import validate_design_structure
+
+            for message in validate_design_structure(project_root, archive_path, body):
+                errors.append(DocumentError(doc, "INVALID_DESIGN", message, rel.replace("\\", "/")))
         errors.extend(_validate_relative_links(doc, body, path.parent, rel))
     return errors
 

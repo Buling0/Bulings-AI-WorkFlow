@@ -14,6 +14,9 @@ from bulings.delivery.paths import ARCHIVE_RELATIVE_PATHS, archive_dir, archive_
 from bulings.delivery.documents import render_managed_markdown
 from bulings.delivery.feature_json import read_feature_meta
 from bulings.delivery.time_util import format_iso8601
+from bulings.delivery.design_flow import compute_architecture_approval_state
+from bulings.delivery.slice_plan import compute_slice_eligibility, read_slice_plan_status
+from bulings.delivery.requirements_flow import compute_requirements_approval_state
 from bulings.delivery.validation import validate_delivery
 from bulings.install import is_unity_project
 
@@ -43,6 +46,9 @@ class StatusDetail:
     archive: str
     updated_at: str
     document_errors: list[dict[str, str]]
+    approval_state: dict[str, str]
+    slice_plan: dict[str, object] | None
+    slice_eligibility: dict[str, str]
 
 
 def default_now() -> datetime:
@@ -142,6 +148,13 @@ def delivery_status(project_root: Path, feature_id: str) -> StatusDetail:
         )
     meta = read_feature_meta(destination / "feature.json")
     doc_errors = [item.to_dict() for item in validate_delivery(destination, feature_id)]
+    req_state = compute_requirements_approval_state(destination, feature_id, meta)
+    arch_state = compute_architecture_approval_state(destination, feature_id, meta)
+    slice_plan = read_slice_plan_status(destination)
+    slice_eligibility: dict[str, str] = {}
+    if slice_plan is not None and (approved_path := destination / "04-plan" / "slice-plan.approved.json").is_file():
+        approved_data = json.loads(approved_path.read_text(encoding="utf-8"))
+        slice_eligibility = compute_slice_eligibility(approved_data)
     return StatusDetail(
         feature_id=meta["featureId"],
         title=meta["title"],
@@ -150,6 +163,9 @@ def delivery_status(project_root: Path, feature_id: str) -> StatusDetail:
         archive=archive_rel_path(feature_id),
         updated_at=meta["updatedAt"],
         document_errors=doc_errors,
+        approval_state={"requirements": req_state, "architecture": arch_state},
+        slice_plan=slice_plan,
+        slice_eligibility=slice_eligibility,
     )
 
 

@@ -79,6 +79,9 @@ def _status_payload(project_root: Path, feature_id: str, *, match: str) -> OpenU
         "archive": detail.archive,
         "updatedAt": detail.updated_at,
         "documentErrors": detail.document_errors,
+        "approvalState": detail.approval_state,
+        "slicePlan": detail.slice_plan,
+        "sliceEligibility": detail.slice_eligibility,
         "match": match,
     }
     return OpenUniqueResult(match=match, payload=payload)
