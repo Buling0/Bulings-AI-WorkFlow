@@ -74,6 +74,11 @@ def entry() -> None:
 
 
 def dispatch(argv: list[str]) -> int:
+    if argv and argv[0] == "delivery":
+        from bulings.delivery.cli import dispatch_delivery
+
+        return dispatch_delivery(argv[1:])
+
     args = parse_args(argv)
     if args.help or not args.command:
         print_help()
