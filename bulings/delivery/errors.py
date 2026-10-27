@@ -25,11 +25,14 @@ class DeliveryError(Exception):
     message: str
     exit_code: int = 1
     blockers: list[Blocker] = field(default_factory=list)
+    candidates: list[dict[str, str]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {"code": self.code, "message": self.message}
         if self.blockers:
             data["blockers"] = [item.to_dict() for item in self.blockers]
+        if self.candidates is not None:
+            data["candidates"] = self.candidates
         return data
 
 
