@@ -11,23 +11,13 @@ from typing import Any, Callable
 from bulings.delivery.errors import Blocker, DeliveryError
 from bulings.delivery.feature_id import is_valid_feature_id
 from bulings.delivery.paths import ARCHIVE_RELATIVE_PATHS, archive_dir, archive_rel_path, deliveries_root
+from bulings.delivery.documents import render_managed_markdown
+from bulings.delivery.feature_json import read_feature_meta
 from bulings.delivery.time_util import format_iso8601
+from bulings.delivery.validation import validate_delivery
 from bulings.install import is_unity_project
 
 NowFn = Callable[[], datetime]
-
-README_TITLES: dict[str, str] = {
-    "01-requirements/README.md": "需求",
-    "02-investigation/README.md": "调查",
-    "03-design/README.md": "设计",
-    "04-plan/README.md": "计划",
-    "05-implementation/README.md": "实施",
-    "06-validation/README.md": "验证",
-}
-
-TERMINOLOGY_MD = "# 术语\n\n## 已确认术语\n\n## 候选术语\n\n"
-PLACEHOLDER_SUFFIX = "\n\n待填写。\n"
-
 
 @dataclass(frozen=True)
 class InitResult:
@@ -52,6 +42,7 @@ class StatusDetail:
     lifecycle: str
     archive: str
     updated_at: str
+    document_errors: list[dict[str, str]]
 
 
 def default_now() -> datetime:
@@ -124,7 +115,7 @@ def list_deliveries(project_root: Path) -> tuple[list[DeliverySummary], list[str
         if blockers:
             invalid.append(feature_id)
             continue
-        meta = _read_feature_meta(entry / "feature.json")
+        meta = read_feature_meta(entry / "feature.json")
         deliveries.append(
             DeliverySummary(
                 feature_id=meta["featureId"],
@@ -149,7 +140,8 @@ def delivery_status(project_root: Path, feature_id: str) -> StatusDetail:
             message="交付档案不完整或无效",
             blockers=blockers,
         )
-    meta = _read_feature_meta(destination / "feature.json")
+    meta = read_feature_meta(destination / "feature.json")
+    doc_errors = [item.to_dict() for item in validate_delivery(destination, feature_id)]
     return StatusDetail(
         feature_id=meta["featureId"],
         title=meta["title"],
@@ -157,6 +149,7 @@ def delivery_status(project_root: Path, feature_id: str) -> StatusDetail:
         lifecycle=meta["lifecycle"],
         archive=archive_rel_path(feature_id),
         updated_at=meta["updatedAt"],
+        document_errors=doc_errors,
     )
 
 
@@ -194,11 +187,8 @@ def _write_new_archive(temp_dir: Path, feature_id: str, title: str, stamp: str) 
         if rel == "feature.json":
             payload = _feature_json_payload(feature_id, title, stamp)
             path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
-        elif rel == "01-requirements/terminology.md":
-            path.write_text(TERMINOLOGY_MD, encoding="utf-8", newline="\n")
-        elif rel.endswith("README.md"):
-            heading = README_TITLES[rel]
-            path.write_text(f"# {heading}{PLACEHOLDER_SUFFIX}", encoding="utf-8", newline="\n")
+        elif rel.endswith(".md"):
+            path.write_text(render_managed_markdown(feature_id, rel), encoding="utf-8", newline="\n")
         else:
             raise DeliveryError(code="INTERNAL", message=f"未处理的档案路径: {rel}")
 
@@ -240,7 +230,7 @@ def _collect_integrity_blockers(archive_path: Path, expected_feature_id: str) ->
     feature_path = archive_path / "feature.json"
     if feature_path.is_file() and not _is_symlink(feature_path):
         try:
-            meta = _read_feature_meta(feature_path)
+            meta = read_feature_meta(feature_path)
         except DeliveryError as error:
             blockers.append(Blocker(code=error.code, message=error.message, path="feature.json"))
             return blockers
@@ -261,16 +251,6 @@ def _collect_integrity_blockers(archive_path: Path, expected_feature_id: str) ->
                 Blocker(code="INVALID_PROFILE", message="profile 必须为 delivery", path="feature.json"),
             )
     return blockers
-
-
-def _read_feature_meta(feature_path: Path) -> dict[str, Any]:
-    try:
-        data = json.loads(feature_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError, UnicodeError) as error:
-        raise DeliveryError(code="INVALID_FEATURE_JSON", message="无法读取 feature.json") from error
-    if not isinstance(data, dict):
-        raise DeliveryError(code="INVALID_FEATURE_JSON", message="feature.json 必须是对象")
-    return data
 
 
 def _is_symlink(path: Path) -> bool:

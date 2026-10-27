@@ -122,6 +122,15 @@ def test_init_does_not_repair_partial_archive() -> None:
         assert not readme.exists()
 
 
+def test_status_empty_when_no_deliveries_dir() -> None:
+    with tempfile.TemporaryDirectory(prefix="bulings-delivery-") as directory:
+        project = Path(directory)
+        _unity_project(project)
+        deliveries, invalid = list_deliveries(project)
+        assert deliveries == []
+        assert invalid == []
+
+
 def test_status_lists_valid_and_invalid() -> None:
     stamp = "2026-10-27T00:00:00+00:00"
     with tempfile.TemporaryDirectory(prefix="bulings-delivery-") as directory:
