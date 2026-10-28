@@ -167,7 +167,10 @@ def read_slice_plan_status(archive: Path) -> dict[str, Any] | None:
     }
 
 
-def compute_slice_eligibility(approved_plan: dict[str, Any]) -> dict[str, str]:
+def compute_slice_eligibility(
+    approved_plan: dict[str, Any],
+    slice_states: dict[str, str] | None = None,
+) -> dict[str, str]:
     slices = approved_plan.get("slices")
     if not isinstance(slices, list):
         return {}
@@ -175,15 +178,21 @@ def compute_slice_eligibility(approved_plan: dict[str, Any]) -> dict[str, str]:
     for item in slices:
         if isinstance(item, dict) and isinstance(item.get("id"), str):
             by_id[item["id"]] = item
+    states = slice_states or {}
+    accepted = {sid for sid, st in states.items() if st == "accepted"}
 
     eligibility: dict[str, str] = {}
     for slice_id, item in by_id.items():
+        state = states.get(slice_id, "pending")
+        if state in {"released", "accepted", "active", "in_review", "changes_requested"}:
+            eligibility[slice_id] = "waiting"
+            continue
         waiting = False
         for dep in _string_list(item.get("dependsOn")):
-            if dep in by_id:
+            if dep in by_id and dep not in accepted:
                 waiting = True
         for replaced in _string_list(item.get("replaces")):
-            if replaced in by_id:
+            if replaced in by_id and replaced not in accepted:
                 waiting = True
         eligibility[slice_id] = "waiting" if waiting else "ready"
     return eligibility

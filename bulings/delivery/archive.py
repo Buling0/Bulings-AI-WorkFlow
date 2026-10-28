@@ -16,6 +16,8 @@ from bulings.delivery.feature_json import read_feature_meta
 from bulings.delivery.time_util import format_iso8601
 from bulings.delivery.design_flow import compute_architecture_approval_state
 from bulings.delivery.slice_plan import compute_slice_eligibility, read_slice_plan_status
+from bulings.delivery.slice_state import load_slice_states
+from bulings.delivery.status_extra import completion_claim, lease_summary, slices_status
 from bulings.delivery.requirements_flow import compute_requirements_approval_state
 from bulings.delivery.validation import validate_delivery
 from bulings.install import is_unity_project
@@ -49,6 +51,9 @@ class StatusDetail:
     approval_state: dict[str, str]
     slice_plan: dict[str, object] | None
     slice_eligibility: dict[str, str]
+    lease: dict[str, str] | None
+    slices: list[dict[str, str]]
+    completion: dict[str, str]
 
 
 def default_now() -> datetime:
@@ -60,6 +65,7 @@ def init_delivery(
     feature_id: str,
     title: str,
     *,
+    profile: str = "delivery",
     now: NowFn | None = None,
 ) -> InitResult:
     now_fn = now or default_now
@@ -68,8 +74,14 @@ def init_delivery(
     _validate_feature_id(feature_id)
     normalized_title = _validate_title(title)
 
+    if profile not in {"delivery", "ui"}:
+        raise DeliveryError(code="INVALID_PROFILE", message="profile 必须是 delivery 或 ui", exit_code=2)
+
     destination = archive_dir(project_root, feature_id)
     if destination.exists():
+        existing = read_feature_meta(destination / "feature.json")
+        if existing.get("profile") != profile:
+            raise DeliveryError(code="PROFILE_MISMATCH", message="已有档案 profile 不一致", exit_code=1)
         blockers = _collect_integrity_blockers(destination, feature_id)
         if blockers:
             raise DeliveryError(
@@ -85,7 +97,7 @@ def init_delivery(
     temp_dir = temp_parent / f".{feature_id}.tmp-{secrets.token_hex(8)}"
     try:
         temp_dir.mkdir(parents=True, exist_ok=False)
-        _write_new_archive(temp_dir, feature_id, normalized_title, stamp)
+        _write_new_archive(temp_dir, feature_id, normalized_title, stamp, profile=profile)
     except DeliveryError:
         if temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -154,7 +166,8 @@ def delivery_status(project_root: Path, feature_id: str) -> StatusDetail:
     slice_eligibility: dict[str, str] = {}
     if slice_plan is not None and (approved_path := destination / "04-plan" / "slice-plan.approved.json").is_file():
         approved_data = json.loads(approved_path.read_text(encoding="utf-8"))
-        slice_eligibility = compute_slice_eligibility(approved_data)
+        states = {sid: data.get("state", "pending") for sid, data in load_slice_states(project_root, feature_id).items()}
+        slice_eligibility = compute_slice_eligibility(approved_data, states)
     return StatusDetail(
         feature_id=meta["featureId"],
         title=meta["title"],
@@ -166,6 +179,9 @@ def delivery_status(project_root: Path, feature_id: str) -> StatusDetail:
         approval_state={"requirements": req_state, "architecture": arch_state},
         slice_plan=slice_plan,
         slice_eligibility=slice_eligibility,
+        lease=lease_summary(project_root, feature_id),
+        slices=slices_status(project_root, feature_id),
+        completion=completion_claim(project_root, feature_id, meta),
     )
 
 
@@ -194,14 +210,14 @@ def _validate_title(title: str) -> str:
     return normalized
 
 
-def _write_new_archive(temp_dir: Path, feature_id: str, title: str, stamp: str) -> None:
+def _write_new_archive(temp_dir: Path, feature_id: str, title: str, stamp: str, *, profile: str = "delivery") -> None:
     for rel in ARCHIVE_RELATIVE_PATHS:
         path = temp_dir / Path(rel)
         if _is_symlink(path):
             raise DeliveryError(code="SYMLINK", message=f"路径不能是符号链接: {rel}")
         path.parent.mkdir(parents=True, exist_ok=True)
         if rel == "feature.json":
-            payload = _feature_json_payload(feature_id, title, stamp)
+            payload = _feature_json_payload(feature_id, title, stamp, profile=profile)
             path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
         elif rel.endswith(".md"):
             path.write_text(render_managed_markdown(feature_id, rel), encoding="utf-8", newline="\n")
@@ -209,12 +225,12 @@ def _write_new_archive(temp_dir: Path, feature_id: str, title: str, stamp: str) 
             raise DeliveryError(code="INTERNAL", message=f"未处理的档案路径: {rel}")
 
 
-def _feature_json_payload(feature_id: str, title: str, stamp: str) -> dict[str, Any]:
+def _feature_json_payload(feature_id: str, title: str, stamp: str, *, profile: str = "delivery") -> dict[str, Any]:
     return {
         "schema": 1,
         "featureId": feature_id,
         "title": title,
-        "profile": "delivery",
+        "profile": profile,
         "lifecycle": "draft",
         "createdAt": stamp,
         "updatedAt": stamp,
@@ -262,9 +278,9 @@ def _collect_integrity_blockers(archive_path: Path, expected_feature_id: str) ->
                     path="feature.json",
                 ),
             )
-        if meta.get("profile") != "delivery":
+        if meta.get("profile") not in {"delivery", "ui"}:
             blockers.append(
-                Blocker(code="INVALID_PROFILE", message="profile 必须为 delivery", path="feature.json"),
+                Blocker(code="INVALID_PROFILE", message="profile 必须为 delivery 或 ui", path="feature.json"),
             )
     return blockers
 

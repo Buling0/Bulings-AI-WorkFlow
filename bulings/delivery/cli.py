@@ -46,6 +46,23 @@ class DeliveryArgs:
     user_confirmation: str | None
     summary: str | None
     digest: str | None
+    profile: str | None
+    slice_id: str | None
+    execution_id: str | None
+    validation_result: str | None
+    covered_validation: list[str]
+    paths: list[str]
+    next_execution_id: str | None
+    rule: str | None
+    candidate_id: str | None
+    conclusion: str | None
+    unverified: str | None
+    risks: str | None
+    stage: str | None
+    snapshot_id: str | None
+    execute: bool
+    scenarios: list[str]
+    input_path: str | None
     help: bool
 
 
@@ -92,14 +109,11 @@ def dispatch_delivery(argv: list[str]) -> int:
             return _cmd_record_design_review(project, args)
         if args.command == "design-ready":
             return _cmd_design_ready(project, args)
-        if args.command == "prepare-plan":
-            return _cmd_prepare_plan(project, args)
-        if args.command == "prepare-slice-plan":
-            return _cmd_prepare_slice_plan(project, args)
-        if args.command == "check-slice-plan":
-            return _cmd_check_slice_plan(project, args)
-        if args.command == "approve-slice-plan":
-            return _cmd_approve_slice_plan(project, args)
+        from bulings.delivery.extra_cli_handlers import handle
+
+        extra = handle(project, args.command, args)
+        if extra is not None:
+            return extra
     except DeliveryError as error:
         return emit_failure(error)
 
@@ -111,7 +125,8 @@ def _cmd_init(project: Path, args: DeliveryArgs) -> int:
         return emit_failure(DeliveryError(code="MISSING_FEATURE_ID", message="缺少 --feature-id", exit_code=2))
     if args.title is None:
         return emit_failure(DeliveryError(code="MISSING_TITLE", message="缺少 --title", exit_code=2))
-    result = init_delivery(project, args.feature_id, args.title, now=default_now)
+    profile = args.profile or "delivery"
+    result = init_delivery(project, args.feature_id, args.title, profile=profile, now=default_now)
     emit_success({"status": result.status, "featureId": result.feature_id, "archive": result.archive})
     return 0
 
@@ -131,12 +146,18 @@ def _cmd_status(project: Path, args: DeliveryArgs) -> int:
                 "approvalState": detail.approval_state,
                 "slicePlan": detail.slice_plan,
                 "sliceEligibility": detail.slice_eligibility,
+                "lease": detail.lease,
+                "slices": detail.slices,
+                "completion": detail.completion,
             }
         )
     else:
+        from bulings.delivery.status_extra import global_lease_summary
+
         deliveries, invalid = list_deliveries(project)
         emit_success(
             {
+                "lease": global_lease_summary(project),
                 "deliveries": [
                     {
                         "featureId": item.feature_id,
@@ -391,11 +412,54 @@ def _parse_delivery_args(argv: list[str]) -> DeliveryArgs:
             "prepare-slice-plan",
             "check-slice-plan",
             "approve-slice-plan",
+            "prepare-task-package",
+            "check-task-package",
+            "start-slice",
+            "checkpoint-slice",
+            "submit-slice",
+            "review-prompt",
+            "review-slice",
+            "open-circuit",
+            "resolve-slice",
+            "interrupt-slice",
+            "amend-scope",
+            "begin-validation",
+            "record-validation",
+            "freeze-delivery",
+            "snapshot-save",
+            "snapshot-list",
+            "snapshot-restore",
+            "prepare-ui-baseline",
+            "check-ui-baseline",
+            "approve-ui-baseline",
+            "record-acceptance",
+            "publish-ui",
+            "approve-final",
         ],
     )
     parser.add_argument("--help", "-h", action="store_true")
     parser.add_argument("--project")
+    parser.add_argument("--profile", default="delivery")
     parser.add_argument("--feature-id", dest="feature_id")
+    parser.add_argument("--slice-id", dest="slice_id")
+    parser.add_argument("--execution-id", dest="execution_id")
+    parser.add_argument("--next-execution-id", dest="next_execution_id")
+    parser.add_argument("--validation-result", dest="validation_result")
+    parser.add_argument("--covered-validation", dest="covered_validation", action="append", default=[])
+    parser.add_argument("--path", dest="paths", action="append", default=[])
+    parser.add_argument("--reason")
+    parser.add_argument("--authorization")
+    parser.add_argument("--rule")
+    parser.add_argument("--candidate-id", dest="candidate_id")
+    parser.add_argument("--conclusion")
+    parser.add_argument("--unverified")
+    parser.add_argument("--risks")
+    parser.add_argument("--stage")
+    parser.add_argument("--name")
+    parser.add_argument("--snapshot-id", dest="snapshot_id")
+    parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--scenario", dest="scenarios", action="append", default=[])
+    parser.add_argument("--input", dest="input_path")
     parser.add_argument("--title")
     parser.add_argument("--document-id", dest="document_ids", action="append", default=[])
     parser.add_argument("--semantic-change", dest="semantic_change", type=_parse_bool)
@@ -423,6 +487,23 @@ def _parse_delivery_args(argv: list[str]) -> DeliveryArgs:
         user_confirmation=namespace.user_confirmation,
         summary=namespace.summary,
         digest=namespace.digest,
+        profile=namespace.profile,
+        slice_id=namespace.slice_id,
+        execution_id=namespace.execution_id,
+        validation_result=namespace.validation_result,
+        covered_validation=list(namespace.covered_validation or []),
+        paths=list(namespace.paths or []),
+        next_execution_id=namespace.next_execution_id,
+        rule=namespace.rule,
+        candidate_id=namespace.candidate_id,
+        conclusion=namespace.conclusion,
+        unverified=namespace.unverified,
+        risks=namespace.risks,
+        stage=namespace.stage,
+        snapshot_id=namespace.snapshot_id,
+        execute=namespace.execute,
+        scenarios=list(namespace.scenarios or []),
+        input_path=namespace.input_path,
         help=namespace.help,
     )
 
