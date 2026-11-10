@@ -85,6 +85,22 @@ Agent 按 `client-split` Skill 逐条归类，写出客户端需求文档，默�
 
 之后把这份文档当策划案：`bulings run --design <客户端需求文档> --prefab ...`。在 Cursor 里也可以直接说“把这份策划案的客户端部分分离出来”。
 
+## AI 知识库
+
+知识库是写给 Agent 看的工程说明：地图、约定、架构、模块页，默认放在 `Docs/AI/Knowledge/`（`knowledge.root` 可改）。
+
+```powershell
+bulings kb --project <Unity工程> --action init
+bulings kb --project <Unity工程> --action update --name <功能名>
+bulings kb --project <Unity工程> --action check
+```
+
+- `init`：读代码建立知识库，已有页面只补缺，不覆盖人工内容。
+- `update`：功能做完后，按该功能的 `tasks.json` 只更新受影响的页面。
+- `check`：只读核对，把过期、缺失、冲突、孤儿页写到 `CHECK.md`，由你决定是否修复。
+
+建好后（`MAP.md` 存在），`run` 会自动把地图交给 Agent，并在功能说明写完后提示它维护受影响的页面。`knowledge.enabled: false` 可整体关闭。内容以代码为准，读不到证据的写进「待核实」。
+
 ## 配置
 
 `.bulings/workflow.yaml` 里，空字符串和空数组表示未配置。工作流会从工程推断目录、命名空间和程序集，写进开发说明的「推断的项目约定」，不把这些推断当成必须遵守的规范。
@@ -99,6 +115,9 @@ unity:
     url: http://localhost:8080/mcp
     command: ""
     args: []
+knowledge:
+  enabled: true
+  root: Docs/AI/Knowledge
 clientSplit:
   path: Docs/AI/ClientSpecs/{feature}.md
 docs:

@@ -71,3 +71,22 @@ def test_unity_project_needs_assets_and_project_settings() -> None:
         (root / "ProjectSettings").unlink()
         (root / "ProjectSettings").mkdir()
         assert is_unity_project(root) is True
+
+
+def test_knowledge_map_is_only_offered_when_enabled_and_present() -> None:
+    from bulings.config import knowledge_map_path
+    from bulings.prompts import format_project_constraints
+
+    with tempfile.TemporaryDirectory(prefix="bulings-kb-") as directory:
+        root = Path(directory)
+        assert merge_config({}).knowledge.root == "Docs/AI/Knowledge"
+        assert knowledge_map_path(merge_config({}), root) is None
+
+        (root / "Docs" / "AI" / "Knowledge").mkdir(parents=True)
+        (root / "Docs" / "AI" / "Knowledge" / "MAP.md").write_text("# map\n", encoding="utf-8")
+        found = knowledge_map_path(merge_config({}), root)
+        assert found == "Docs/AI/Knowledge/MAP.md"
+        assert knowledge_map_path(merge_config({"knowledge": {"enabled": False}}), root) is None
+
+        text = format_project_constraints(merge_config({}).project, found)
+        assert "知识库地图：Docs/AI/Knowledge/MAP.md" in text

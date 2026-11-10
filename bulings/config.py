@@ -13,6 +13,7 @@ DEFAULT_MODEL = "composer-2.5"
 DEFAULT_DEV_SPEC = "Docs/AI/DevSpecs/{feature}.md"
 DEFAULT_FEATURE_DOC = "Docs/AI/Features/{feature}.md"
 DEFAULT_CLIENT_SPEC = "Docs/AI/ClientSpecs/{feature}.md"
+DEFAULT_KNOWLEDGE_ROOT = "Docs/AI/Knowledge"
 DEFAULT_MCP_SERVER = "unity"
 DEFAULT_MCP_URL = "http://localhost:8080/mcp"
 _UNSAFE_FEATURE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -59,6 +60,12 @@ class UnityMcpConfig:
 
 
 @dataclass
+class KnowledgeConfig:
+    enabled: bool = True
+    root: str = DEFAULT_KNOWLEDGE_ROOT
+
+
+@dataclass
 class WorkflowConfig:
     mode: WorkflowMode
     model: str
@@ -66,6 +73,7 @@ class WorkflowConfig:
     project: ProjectProfile
     unity_mcp: UnityMcpConfig = field(default_factory=UnityMcpConfig)
     client_spec_path: str = DEFAULT_CLIENT_SPEC
+    knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
 
 
 @dataclass
@@ -115,6 +123,7 @@ def merge_config(raw: object) -> WorkflowConfig:
     project = _as_object(root.get("project")) or {}
     unity = _as_object(root.get("unity")) or {}
     mcp = _as_object(unity.get("mcp")) or {}
+    knowledge = _as_object(root.get("knowledge")) or {}
     client_split = _as_object(root.get("clientSplit")) or {}
     ui = _as_object(project.get("ui")) or {}
 
@@ -125,6 +134,10 @@ def merge_config(raw: object) -> WorkflowConfig:
             url=_as_string(mcp["url"]) if "url" in mcp else DEFAULT_MCP_URL,
             command=_as_string(mcp.get("command")),
             args=_as_string_array(mcp.get("args")),
+        ),
+        knowledge=KnowledgeConfig(
+            enabled=_as_boolean(knowledge.get("enabled"), True),
+            root=_non_empty_string(knowledge.get("root"), DEFAULT_KNOWLEDGE_ROOT),
         ),
         client_spec_path=_non_empty_string(client_split.get("path"), DEFAULT_CLIENT_SPEC),
         mode="indie" if mode_raw == "indie" else "work",
@@ -189,6 +202,17 @@ def resolve_run_config(
         dev_spec_path=resolve_doc_path(dev_spec_pattern, token, project_root),
         feature_doc_path=resolve_doc_path(feature_doc_pattern, token, project_root),
     )
+
+
+def knowledge_map_path(config: WorkflowConfig, project_root: str | os.PathLike[str]) -> str | None:
+    """知识库启用且 MAP.md 已存在时返回相对工程的路径，否则 None。"""
+    if not config.knowledge.enabled:
+        return None
+    root = config.knowledge.root.rstrip("/\\")
+    absolute = resolve_doc_path(root + "/MAP.md", "", project_root)
+    if not os.path.isfile(absolute):
+        return None
+    return to_project_path(project_root, absolute)
 
 
 def resolve_doc_path(pattern: str, feature: str, project_root: str | os.PathLike[str]) -> str:

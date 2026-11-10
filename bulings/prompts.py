@@ -21,6 +21,8 @@ class PromptContext:
     protected_paths: list[str]
     unity_mcp_server: str = ""
     client_spec_path: str = ""
+    knowledge_root: str = ""
+    knowledge_map: str = ""
 
 
 @dataclass
@@ -32,8 +34,10 @@ class SplitContext:
     protected_paths: list[str]
 
 
-def format_project_constraints(project: ProjectProfile) -> str:
+def format_project_constraints(project: ProjectProfile, knowledge_map: str = "") -> str:
     lines: list[str] = []
+    if knowledge_map:
+        lines.append(f"知识库地图：{knowledge_map}（分析前先读，按 work-feature 的「知识库」一节使用）")
     if project.code_roots:
         lines.append(f"代码目录：{'、'.join(project.code_roots)}")
     if project.namespaces:
@@ -127,13 +131,13 @@ def document_prompt(context: PromptContext) -> str:
             f"功能说明写入：{context.feature_doc_path}",
             "按 .cursor/skills/work-feature/feature-doc-template.md，依据实际改过的代码来写。",
             "写清：功能做什么、入口、主要类型、数据流、依赖的项目模块、修改时要动哪些文件、已知限制、和策划不一致的地方。",
+            *_knowledge_update_lines(context),
         ]
     )
 
 
 def split_prompt(context: SplitContext) -> str:
-    return "
-".join(
+    return "\n".join(
         [
             "先阅读 .cursor/skills/client-split/SKILL.md，并按它把策划案里客户端要开发的内容分离出来。",
             "只读策划案和工程，只写客户端开发需求文档，不要写玩法代码，不要建 tasks.json。",
@@ -150,6 +154,45 @@ def split_prompt(context: SplitContext) -> str:
             "归属不明的条目放进文档的「待确认」，不要自行归入客户端。",
         ]
     )
+
+
+def _knowledge_update_lines(context: PromptContext) -> list[str]:
+    if not context.knowledge_map:
+        return []
+    return [
+        f"知识库已存在（地图 {context.knowledge_map}）。功能说明写完后，按 .cursor/skills/knowledge-base/SKILL.md 的 update 动作，"
+        "只更新受本功能影响的知识库页面；无需更新就明说，不要为了有产出而改。",
+    ]
+
+
+@dataclass
+class KnowledgeContext:
+    action: str
+    root: str
+    feature: str
+    tasks_path: str
+    constraints: str
+    protected_paths: list[str]
+
+
+def knowledge_prompt(context: KnowledgeContext) -> str:
+    lines = [
+        f"先阅读 .cursor/skills/knowledge-base/SKILL.md，并只执行其中的 {context.action} 动作。不要写玩法代码。",
+        f"知识库根目录：{context.root}",
+    ]
+    if context.action == "update":
+        lines.append(f"功能名：{context.feature}；任务文件：{context.tasks_path}（据此和 git 工作区改动确定受影响的模块）。")
+    if context.action == "check":
+        lines.append(f"只读核对，报告写到 {context.root}/CHECK.md，不要改其他知识库页面。")
+    lines += [
+        "",
+        "项目约束：",
+        context.constraints,
+        "",
+        _protected_line(context.protected_paths),
+        "不要创建 git commit。不要修改 .meta 的 guid。读不到证据的写进「待核实」，不要脑补。",
+    ]
+    return "\n".join(lines)
 
 
 def _mcp_lines(context: PromptContext, phase: str) -> list[str]:

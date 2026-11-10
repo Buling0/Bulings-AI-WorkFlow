@@ -13,6 +13,7 @@ HELP_TEXT = """用法
   bulings init --project <Unity工程>
   bulings run --project <Unity工程> --design <策划案> --prefab <预制体> [--prefab <预制体> ...] [--name <功能名>] [--dev-spec <路径>] [--feature-doc <路径>] [--no-dev-spec] [--no-feature-doc] [--model <模型>]
   bulings split --project <Unity工程> --design <策划案> [--name <功能名>] [--output <路径>] [--model <模型>]
+  bulings kb --project <Unity工程> --action <init|update|check> [--name <功能名>] [--model <模型>]
   bulings resume --project <Unity工程> --run <slug>
 
 环境变量
@@ -50,6 +51,7 @@ class ParsedArgs:
     model: str | None = None
     run: str | None = None
     output: str | None = None
+    action: str | None = None
     help: bool = False
 
 
@@ -97,6 +99,8 @@ def dispatch(argv: list[str]) -> int:
         return run_command(args, project)
     if args.command == "split":
         return split_command(args, project)
+    if args.command == "kb":
+        return kb_command(args, project)
     if args.command == "resume":
         return resume_command(args, project)
 
@@ -158,6 +162,15 @@ def split_command(args: ParsedArgs, project: str) -> int:
     )
 
 
+def kb_command(args: ParsedArgs, project: str) -> int:
+    if not args.action:
+        print("缺少 --action <init|update|check>", file=sys.stderr)
+        return 1
+    from bulings.runner import KnowledgeCommand, knowledge_workflow
+
+    return knowledge_workflow(KnowledgeCommand(project=project, action=args.action, name=args.name, model=args.model))
+
+
 def resume_command(args: ParsedArgs, project: str) -> int:
     if not args.run:
         print("缺少 --run <slug>", file=sys.stderr)
@@ -185,6 +198,7 @@ def parse_args(argv: list[str]) -> ParsedArgs:
         model=namespace.model,
         run=namespace.run_slug,
         output=namespace.output,
+        action=namespace.action,
         help=namespace.help,
     )
 
@@ -195,7 +209,7 @@ def print_help() -> None:
 
 def _build_parser() -> BulingsParser:
     parser = BulingsParser(prog="bulings", add_help=False, allow_abbrev=False)
-    parser.add_argument("command", nargs="?", choices=["init", "run", "split", "resume"])
+    parser.add_argument("command", nargs="?", choices=["init", "run", "split", "kb", "resume"])
     parser.add_argument("--help", "-h", action="store_true")
     parser.add_argument("--project")
     parser.add_argument("--design")
@@ -204,6 +218,7 @@ def _build_parser() -> BulingsParser:
     parser.add_argument("--feature-doc", dest="feature_doc")
     parser.add_argument("--model")
     parser.add_argument("--output")
+    parser.add_argument("--action")
     parser.add_argument("--run", dest="run_slug")
     parser.add_argument("--no-dev-spec", action="store_true")
     parser.add_argument("--no-feature-doc", action="store_true")

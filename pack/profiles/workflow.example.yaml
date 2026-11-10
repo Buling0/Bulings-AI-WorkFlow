@@ -22,6 +22,11 @@ unity:
     command: ""
     args: []
 
+# AI 知识库：bulings kb --action init 建立；建好后 run 会自动把地图交给 Agent，功能完成后自动维护。
+knowledge:
+  enabled: true
+  root: Docs/AI/Knowledge
+
 # 前端分离：策划案里客户端部分抽出来的文档路径。
 clientSplit:
   path: Docs/AI/ClientSpecs/{feature}.md

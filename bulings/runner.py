@@ -15,6 +15,7 @@ from bulings.config import (
     RunOverrides,
     feature_from_design,
     feature_token,
+    knowledge_map_path,
     load_workflow_config,
     resolve_doc_path,
     resolve_run_config,
@@ -26,8 +27,10 @@ from bulings.prompts import (
     analyze_prompt,
     document_prompt,
     format_project_constraints,
+    KnowledgeContext,
     SplitContext,
     implement_prompt,
+    knowledge_prompt,
     split_prompt,
 )
 from bulings.tasks import (
@@ -56,6 +59,14 @@ class SplitCommand:
     design: str
     name: str | None = None
     output: str | None = None
+    model: str | None = None
+
+
+@dataclass
+class KnowledgeCommand:
+    project: str
+    action: str
+    name: str | None = None
     model: str | None = None
 
 
@@ -169,7 +180,7 @@ def split_workflow(command: SplitCommand) -> int:
         feature=feature,
         design_path=to_project_path(project_root, design_path),
         output_path=to_project_path(project_root, output_path),
-        constraints=format_project_constraints(config.project),
+        constraints=format_project_constraints(config.project, knowledge_map_path(config, project_root) or ""),
         protected_paths=list(config.project.protected_paths),
     )
     state = RunState(
@@ -202,6 +213,67 @@ def split_workflow(command: SplitCommand) -> int:
         return 2
     print(f"客户端需求文档已写入 {context.output_path}")
     print(f"接着做开发：bulings run --project <工程> --design {context.output_path} --prefab <预制体>")
+    return 0
+
+
+def knowledge_workflow(command: KnowledgeCommand) -> int:
+    project_root = os.path.abspath(command.project)
+    unity_error = _unity_check(project_root)
+    if unity_error != 0:
+        return unity_error
+    if command.action not in ("init", "update", "check"):
+        print(f"未知的知识库动作: {command.action}（可选 init、update、check）", file=sys.stderr)
+        return 1
+
+    config = load_workflow_config(project_root)
+    if config.mode == "indie":
+        return _indie_stop()
+    if not config.knowledge.enabled:
+        print("workflow.yaml 里 knowledge.enabled 为 false，知识库未启用。", file=sys.stderr)
+        return 1
+
+    skill = Path(project_root) / ".cursor" / "skills" / "knowledge-base" / "SKILL.md"
+    if not skill.exists():
+        print("工程里还没有知识库 Skill。请先执行 bulings init --project <Unity工程>", file=sys.stderr)
+        return 1
+    if command.action != "init" and knowledge_map_path(config, project_root) is None:
+        print("知识库还没建立（找不到 MAP.md）。请先执行 bulings kb --action init", file=sys.stderr)
+        return 1
+    if command.action == "update" and not (command.name and command.name.strip()):
+        print("update 需要 --name <功能名>（对应 .bulings/runs/<功能名>/tasks.json）", file=sys.stderr)
+        return 1
+
+    api_key = _require_api_key()
+    if not api_key:
+        return 1
+
+    feature = feature_token(command.name) if command.name and command.name.strip() else ""
+    context = KnowledgeContext(
+        action=command.action,
+        root=config.knowledge.root,
+        feature=feature,
+        tasks_path=to_project_path(project_root, str(_tasks_file(project_root, feature))) if feature else "",
+        constraints=format_project_constraints(config.project),
+        protected_paths=list(config.project.protected_paths),
+    )
+    model = (command.model or "").strip() or config.model
+    try:
+        with Agent.create(
+            model=model,
+            api_key=api_key,
+            local=LocalAgentOptions(cwd=project_root, setting_sources=["project"]),
+        ) as agent:
+            print(f"agentId={agent.agent_id}", flush=True)
+            print(f"[知识库 {command.action}] 开始", file=sys.stderr)
+            code = _send_plain(agent, knowledge_prompt(context))
+    except CursorAgentError as error:
+        return _handle_startup_error(error)
+    if code != 0:
+        return code
+    if command.action == "init" and knowledge_map_path(config, project_root) is None:
+        print("Agent 结束但没有写出 MAP.md。", file=sys.stderr)
+        return 2
+    print(f"知识库 {command.action} 完成，根目录 {config.knowledge.root}")
     return 0
 
 
@@ -461,7 +533,9 @@ def _all_tasks_done(project_root: str, slug: str) -> bool:
 
 
 def _prompt_context(project_root: str, state: RunState, project: ProjectProfile) -> PromptContext:
-    mcp = load_workflow_config(project_root).unity_mcp
+    full_config = load_workflow_config(project_root)
+    mcp = full_config.unity_mcp
+    kb_map = knowledge_map_path(full_config, project_root) or ""
     mcp_server = mcp.server if mcp.enabled and mcp_server_entry(mcp) is not None else ""
     return PromptContext(
         feature=state.feature,
@@ -473,9 +547,11 @@ def _prompt_context(project_root: str, state: RunState, project: ProjectProfile)
         feature_doc_enabled=state.feature_doc_enabled,
         dev_spec_path=to_project_path(project_root, state.dev_spec_path),
         feature_doc_path=to_project_path(project_root, state.feature_doc_path),
-        constraints=format_project_constraints(project),
+        constraints=format_project_constraints(project, kb_map),
         protected_paths=list(project.protected_paths),
         unity_mcp_server=mcp_server,
+        knowledge_root=full_config.knowledge.root,
+        knowledge_map=kb_map,
     )
 
 
