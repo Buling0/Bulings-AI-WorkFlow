@@ -19,6 +19,17 @@ class PromptContext:
     feature_doc_path: str
     constraints: str
     protected_paths: list[str]
+    unity_mcp_server: str = ""
+    client_spec_path: str = ""
+
+
+@dataclass
+class SplitContext:
+    feature: str
+    design_path: str
+    output_path: str
+    constraints: str
+    protected_paths: list[str]
 
 
 def format_project_constraints(project: ProjectProfile) -> str:
@@ -70,6 +81,7 @@ def analyze_prompt(context: PromptContext) -> str:
             "",
             _protected_line(context.protected_paths),
             "不要创建 git commit。不要修改 .meta 的 guid。不要启动 Unity 批处理编译。",
+            *_mcp_lines(context, "analyze"),
             "tasks.json 的 status 只能是 pending、in_progress、done、blocked。至少一项任务。id 不要重复。",
             "策划和预制体不一致时，该项 status 为 blocked，并写 blockedReason。",
         ]
@@ -117,6 +129,40 @@ def document_prompt(context: PromptContext) -> str:
             "写清：功能做什么、入口、主要类型、数据流、依赖的项目模块、修改时要动哪些文件、已知限制、和策划不一致的地方。",
         ]
     )
+
+
+def split_prompt(context: SplitContext) -> str:
+    return "
+".join(
+        [
+            "先阅读 .cursor/skills/client-split/SKILL.md，并按它把策划案里客户端要开发的内容分离出来。",
+            "只读策划案和工程，只写客户端开发需求文档，不要写玩法代码，不要建 tasks.json。",
+            "",
+            f"功能名：{context.feature}",
+            f"策划案：{context.design_path}",
+            f"客户端需求文档（必须写入）：{context.output_path}",
+            "",
+            "项目约束：",
+            context.constraints,
+            "",
+            _protected_line(context.protected_paths),
+            "不要创建 git commit。不要修改 .meta 的 guid。",
+            "归属不明的条目放进文档的「待确认」，不要自行归入客户端。",
+        ]
+    )
+
+
+def _mcp_lines(context: PromptContext, phase: str) -> list[str]:
+    if not context.unity_mcp_server:
+        return []
+    server = context.unity_mcp_server
+    if phase == "analyze":
+        return [f"Unity MCP（服务 {server}）可用：只用来读场景、预制体层级和控制台，分析阶段不要修改场景或资源。"]
+    return [
+        f"Unity MCP（服务 {server}）可用。按 .cursor/skills/work-feature/unity-mcp.md 使用："
+        "改完脚本后用它刷新、读控制台确认无编译错误，需要时在编辑器里绑定预制体引用。",
+        "MCP 连不上时如实写进该项的 blockedReason 或说明，不要假装已验证。",
+    ]
 
 
 def _protected_line(paths: list[str]) -> str:

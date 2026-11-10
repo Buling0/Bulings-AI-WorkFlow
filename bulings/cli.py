@@ -12,6 +12,7 @@ from bulings.install import install_workflow, is_unity_project
 HELP_TEXT = """用法
   bulings init --project <Unity工程>
   bulings run --project <Unity工程> --design <策划案> --prefab <预制体> [--prefab <预制体> ...] [--name <功能名>] [--dev-spec <路径>] [--feature-doc <路径>] [--no-dev-spec] [--no-feature-doc] [--model <模型>]
+  bulings split --project <Unity工程> --design <策划案> [--name <功能名>] [--output <路径>] [--model <模型>]
   bulings resume --project <Unity工程> --run <slug>
 
 环境变量
@@ -48,6 +49,7 @@ class ParsedArgs:
     no_feature_doc: bool = False
     model: str | None = None
     run: str | None = None
+    output: str | None = None
     help: bool = False
 
 
@@ -93,6 +95,8 @@ def dispatch(argv: list[str]) -> int:
         return init_command(project)
     if args.command == "run":
         return run_command(args, project)
+    if args.command == "split":
+        return split_command(args, project)
     if args.command == "resume":
         return resume_command(args, project)
 
@@ -107,6 +111,8 @@ def init_command(project: str) -> int:
         return 1
     result = install_workflow(project)
     print(f"已安装 Skill 到 {os.path.join(project, '.cursor', 'skills')}")
+    if result.mcp_written:
+        print(f"已写入 Unity MCP 配置 {os.path.join(project, '.cursor', 'mcp.json')}（需要在 Unity 里启动对应的 MCP 服务）")
     config_path = os.path.join(project, ".bulings", "workflow.yaml")
     if result.config_written:
         print(f"已写入 {config_path}")
@@ -141,6 +147,17 @@ def run_command(args: ParsedArgs, project: str) -> int:
     )
 
 
+def split_command(args: ParsedArgs, project: str) -> int:
+    if not args.design:
+        print("缺少 --design <策划案>", file=sys.stderr)
+        return 1
+    from bulings.runner import SplitCommand, split_workflow
+
+    return split_workflow(
+        SplitCommand(project=project, design=args.design, name=args.name, output=args.output, model=args.model)
+    )
+
+
 def resume_command(args: ParsedArgs, project: str) -> int:
     if not args.run:
         print("缺少 --run <slug>", file=sys.stderr)
@@ -167,6 +184,7 @@ def parse_args(argv: list[str]) -> ParsedArgs:
         no_feature_doc=namespace.no_feature_doc,
         model=namespace.model,
         run=namespace.run_slug,
+        output=namespace.output,
         help=namespace.help,
     )
 
@@ -177,7 +195,7 @@ def print_help() -> None:
 
 def _build_parser() -> BulingsParser:
     parser = BulingsParser(prog="bulings", add_help=False, allow_abbrev=False)
-    parser.add_argument("command", nargs="?", choices=["init", "run", "resume"])
+    parser.add_argument("command", nargs="?", choices=["init", "run", "split", "resume"])
     parser.add_argument("--help", "-h", action="store_true")
     parser.add_argument("--project")
     parser.add_argument("--design")
@@ -185,6 +203,7 @@ def _build_parser() -> BulingsParser:
     parser.add_argument("--dev-spec", dest="dev_spec")
     parser.add_argument("--feature-doc", dest="feature_doc")
     parser.add_argument("--model")
+    parser.add_argument("--output")
     parser.add_argument("--run", dest="run_slug")
     parser.add_argument("--no-dev-spec", action="store_true")
     parser.add_argument("--no-feature-doc", action="store_true")

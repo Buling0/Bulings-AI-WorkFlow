@@ -12,6 +12,20 @@ docs:
     enabled: true
     path: Docs/AI/Features/{feature}.md
 
+# Unity MCP：bulings init 会把它合并写入 .cursor/mcp.json（已有同名条目不覆盖）。
+# 默认指向本机 HTTP 服务；用 stdio 启动时填 command/args 并清空 url。
+unity:
+  mcp:
+    enabled: true
+    server: unity
+    url: http://localhost:8080/mcp
+    command: ""
+    args: []
+
+# 前端分离：策划案里客户端部分抽出来的文档路径。
+clientSplit:
+  path: Docs/AI/ClientSpecs/{feature}.md
+
 project:
   codeRoots: []
   namespaces: []

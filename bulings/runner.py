@@ -16,16 +16,19 @@ from bulings.config import (
     feature_from_design,
     feature_token,
     load_workflow_config,
+    resolve_doc_path,
     resolve_run_config,
     to_project_path,
 )
-from bulings.install import is_unity_project
+from bulings.install import is_unity_project, mcp_server_entry
 from bulings.prompts import (
     PromptContext,
     analyze_prompt,
     document_prompt,
     format_project_constraints,
+    SplitContext,
     implement_prompt,
+    split_prompt,
 )
 from bulings.tasks import (
     mark_task_in_progress,
@@ -45,6 +48,15 @@ class RunCommand:
     prefabs: list[str]
     name: str | None
     overrides: RunOverrides
+
+
+@dataclass
+class SplitCommand:
+    project: str
+    design: str
+    name: str | None = None
+    output: str | None = None
+    model: str | None = None
 
 
 @dataclass
@@ -127,6 +139,70 @@ def run_workflow(command: RunCommand) -> int:
             return _drive(agent, project_root, state, config.project, False)
     except CursorAgentError as error:
         return _handle_startup_error(error)
+
+
+def split_workflow(command: SplitCommand) -> int:
+    project_root = os.path.abspath(command.project)
+    unity_error = _unity_check(project_root)
+    if unity_error != 0:
+        return unity_error
+
+    config = load_workflow_config(project_root)
+    if config.mode == "indie":
+        return _indie_stop()
+
+    design_path = _resolve_existing_file(command.design, project_root)
+    feature = feature_token(command.name if command.name and command.name.strip() else feature_from_design(design_path))
+    pattern = command.output if command.output else config.client_spec_path
+    output_path = resolve_doc_path(pattern, feature, project_root)
+
+    skill = Path(project_root) / ".cursor" / "skills" / "client-split" / "SKILL.md"
+    if not skill.exists():
+        print("工程里还没有前端分离 Skill。请先执行 bulings init --project <Unity工程>", file=sys.stderr)
+        return 1
+
+    api_key = _require_api_key()
+    if not api_key:
+        return 1
+
+    context = SplitContext(
+        feature=feature,
+        design_path=to_project_path(project_root, design_path),
+        output_path=to_project_path(project_root, output_path),
+        constraints=format_project_constraints(config.project),
+        protected_paths=list(config.project.protected_paths),
+    )
+    state = RunState(
+        slug=feature,
+        feature=feature,
+        design_path=design_path,
+        prefabs=[],
+        dev_spec_enabled=False,
+        feature_doc_enabled=False,
+        dev_spec_path="",
+        feature_doc_path="",
+        model=(command.model or "").strip() or config.model,
+        phase="split",
+    )
+    try:
+        with Agent.create(
+            model=state.model,
+            api_key=api_key,
+            local=LocalAgentOptions(cwd=project_root, setting_sources=["project"]),
+        ) as agent:
+            print(f"agentId={agent.agent_id}", flush=True)
+            print("[前端分离] 开始", file=sys.stderr)
+            code = _send_plain(agent, split_prompt(context))
+    except CursorAgentError as error:
+        return _handle_startup_error(error)
+    if code != 0:
+        return code
+    if not os.path.isfile(output_path):
+        print(f"Agent 结束但没有写出 {context.output_path}。", file=sys.stderr)
+        return 2
+    print(f"客户端需求文档已写入 {context.output_path}")
+    print(f"接着做开发：bulings run --project <工程> --design {context.output_path} --prefab <预制体>")
+    return 0
 
 
 def resume_workflow(command: ResumeCommand) -> int:
@@ -309,12 +385,17 @@ def _run_document(agent: Any, project_root: str, state: RunState, project: Proje
     return _send(agent, project_root, state, document_prompt(_prompt_context(project_root, state, project)))
 
 
-def _send(agent: Any, project_root: str, state: RunState, prompt: str) -> int:
+def _send_plain(agent: Any, prompt: str) -> int:
+    return _send(agent, None, None, prompt)
+
+
+def _send(agent: Any, project_root: str | None, state: RunState | None, prompt: str) -> int:
     try:
         run = agent.send(prompt)
         print(f"agentId={agent.agent_id} run.id={run.id}", flush=True)
-        state.last_run_id = run.id
-        _save_state(project_root, state)
+        if state is not None and project_root is not None:
+            state.last_run_id = run.id
+            _save_state(project_root, state)
 
         can_stream = bool(run.supports("stream") or run.supports("messages"))
         try:
@@ -380,6 +461,8 @@ def _all_tasks_done(project_root: str, slug: str) -> bool:
 
 
 def _prompt_context(project_root: str, state: RunState, project: ProjectProfile) -> PromptContext:
+    mcp = load_workflow_config(project_root).unity_mcp
+    mcp_server = mcp.server if mcp.enabled and mcp_server_entry(mcp) is not None else ""
     return PromptContext(
         feature=state.feature,
         slug=state.slug,
@@ -392,6 +475,7 @@ def _prompt_context(project_root: str, state: RunState, project: ProjectProfile)
         feature_doc_path=to_project_path(project_root, state.feature_doc_path),
         constraints=format_project_constraints(project),
         protected_paths=list(project.protected_paths),
+        unity_mcp_server=mcp_server,
     )
 
 

@@ -4,6 +4,8 @@
 
 两条入口用同一份 Skill。装进 Unity 工程后，可以在 Cursor 对话里做，也可以用命令行在本机拉起 Agent。
 
+完整的上手流程见 [使用说明](docs/使用说明.md)。
+
 ## 准备
 
 需要 Python 3.10 或更高版本，以及环境变量 `CURSOR_API_KEY`（Cursor Dashboard → Integrations 里的用户 API key）。命令行使用 Cursor Python SDK，只在本机运行，工作目录是 Unity 工程，并且只加载该工程里的项目配置。
@@ -65,6 +67,24 @@ bulings resume --project <Unity工程> --run <功能名>
 
 不依赖阻塞项的任务会先做。轮到阻塞项时停下。`resume` 会把当前这项改回 `in_progress` 再做，原来的阻塞原因会带进提示。中断留下的 `in_progress` 会重做那一项。
 
+## 接入 Unity MCP
+
+`bulings init` 会按 `workflow.yaml` 的 `unity.mcp` 把 Unity MCP 服务合并写入 `<工程>/.cursor/mcp.json`（已有同名条目不覆盖，`enabled: false` 则不写）。默认指向 `http://localhost:8080/mcp`；用 stdio 启动的服务，填 `command`/`args` 并清空 `url`。你需要先在 Unity 里安装并启动所选的 MCP 插件。
+
+配置好后，Cursor 对话和命令行 Agent 都能用 MCP 刷新编译、读控制台、在编辑器里绑定预制体；规则见 Skill 里的 `unity-mcp.md`。分析阶段只读，连不上时 Agent 会如实说明，不会假装验证。
+
+## 前端分离
+
+策划案同时含客户端和服务端内容时，先把客户端部分分出来：
+
+```powershell
+bulings split --project <Unity工程> --design <策划案> [--name <功能名>] [--output <路径>] [--model <模型>]
+```
+
+Agent 按 `client-split` Skill 逐条归类，写出客户端需求文档，默认 `Docs/AI/ClientSpecs/{feature}.md`（`clientSplit.path` 可改）。文档含客户端需求清单（带编号和策划案出处）、服务端依赖、依赖的配置、涉及的预制体、待确认、已排除。归属不明的条目进「待确认」，不会自行归入客户端。
+
+之后把这份文档当策划案：`bulings run --design <客户端需求文档> --prefab ...`。在 Cursor 里也可以直接说“把这份策划案的客户端部分分离出来”。
+
 ## 配置
 
 `.bulings/workflow.yaml` 里，空字符串和空数组表示未配置。工作流会从工程推断目录、命名空间和程序集，写进开发说明的「推断的项目约定」，不把这些推断当成必须遵守的规范。
@@ -72,6 +92,15 @@ bulings resume --project <Unity工程> --run <功能名>
 ```yaml
 mode: work              # work 或 indie
 model: composer-2.5
+unity:
+  mcp:
+    enabled: true
+    server: unity
+    url: http://localhost:8080/mcp
+    command: ""
+    args: []
+clientSplit:
+  path: Docs/AI/ClientSpecs/{feature}.md
 docs:
   devSpec:
     enabled: true
@@ -102,4 +131,4 @@ project:
 
 ## 本版本不做的事
 
-不实现独游模式的开发流程，不调用 Unity 批处理编译，也不自动创建 git commit。
+不实现独游模式的开发流程，不调用 Unity 批处理编译（编辑器内的 MCP 刷新不受此限），也不自动创建 git commit。

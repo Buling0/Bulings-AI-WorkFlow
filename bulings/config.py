@@ -12,6 +12,9 @@ WorkflowMode = str
 DEFAULT_MODEL = "composer-2.5"
 DEFAULT_DEV_SPEC = "Docs/AI/DevSpecs/{feature}.md"
 DEFAULT_FEATURE_DOC = "Docs/AI/Features/{feature}.md"
+DEFAULT_CLIENT_SPEC = "Docs/AI/ClientSpecs/{feature}.md"
+DEFAULT_MCP_SERVER = "unity"
+DEFAULT_MCP_URL = "http://localhost:8080/mcp"
 _UNSAFE_FEATURE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _LEADING_DOTS = re.compile(r"^\.+")
 
@@ -47,11 +50,22 @@ class DocsConfig:
 
 
 @dataclass
+class UnityMcpConfig:
+    enabled: bool = True
+    server: str = DEFAULT_MCP_SERVER
+    url: str = DEFAULT_MCP_URL
+    command: str = ""
+    args: list[str] = field(default_factory=list)
+
+
+@dataclass
 class WorkflowConfig:
     mode: WorkflowMode
     model: str
     docs: DocsConfig
     project: ProjectProfile
+    unity_mcp: UnityMcpConfig = field(default_factory=UnityMcpConfig)
+    client_spec_path: str = DEFAULT_CLIENT_SPEC
 
 
 @dataclass
@@ -99,9 +113,20 @@ def merge_config(raw: object) -> WorkflowConfig:
     dev_spec = _as_object(docs.get("devSpec")) or {}
     feature_doc = _as_object(docs.get("featureDoc")) or {}
     project = _as_object(root.get("project")) or {}
+    unity = _as_object(root.get("unity")) or {}
+    mcp = _as_object(unity.get("mcp")) or {}
+    client_split = _as_object(root.get("clientSplit")) or {}
     ui = _as_object(project.get("ui")) or {}
 
     return WorkflowConfig(
+        unity_mcp=UnityMcpConfig(
+            enabled=_as_boolean(mcp.get("enabled"), True),
+            server=_non_empty_string(mcp.get("server"), DEFAULT_MCP_SERVER),
+            url=_as_string(mcp["url"]) if "url" in mcp else DEFAULT_MCP_URL,
+            command=_as_string(mcp.get("command")),
+            args=_as_string_array(mcp.get("args")),
+        ),
+        client_spec_path=_non_empty_string(client_split.get("path"), DEFAULT_CLIENT_SPEC),
         mode="indie" if mode_raw == "indie" else "work",
         model=_non_empty_string(root.get("model"), DEFAULT_MODEL),
         docs=DocsConfig(
