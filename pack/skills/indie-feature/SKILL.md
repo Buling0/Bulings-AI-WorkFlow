@@ -13,6 +13,8 @@ description: 独游模式（小规模游戏）的功能开发：先把可扩展�
 
 读取工程根目录的 `.bulings/workflow.yaml`。没有文件时：`mode` 为 `work`，开发说明写 `Docs/AI/DevSpecs/{feature}.md`，功能说明写 `Docs/AI/Features/{feature}.md`。
 
+还没有策划案时，先用 `indie-design` Skill（命令行 `bulings design`）从玩法灵感迭代出一份：按玩法、剧情、风格、流程逐轮给开发者选项，选完定稿，再把定稿的策划案当作 `--design` 输入拿到这里做功能。策划案里没定下来的地方，在「拆切片」时变成 `blocked` 任务并写清缺什么。
+
 独游相关：
 
 ```yaml

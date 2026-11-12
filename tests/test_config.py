@@ -153,3 +153,26 @@ def test_work_mode_keeps_the_framework_switch_and_its_own_paths() -> None:
     assert resolved.game == "game"
     assert resolved.framework_enabled is True
     assert resolved.feature_doc_path == os.path.normpath(os.path.join(root, "Docs", "AI", "Features", "背包.md"))
+
+
+def test_design_defaults_and_overrides() -> None:
+    config = merge_config({"mode": "indie"})
+    assert config.design.path == "Docs/AI/GameDesigns/{feature}.md"
+    assert config.design.rounds == 4
+    assert config.design.options == 3
+
+    overridden = merge_config(
+        {"indie": {"design": {"path": "Docs/GDD/{feature}.md", "rounds": 6, "options": 5}}}
+    )
+    assert overridden.design.path == "Docs/GDD/{feature}.md"
+    assert overridden.design.rounds == 6
+    assert overridden.design.options == 5
+
+
+def test_design_numbers_are_clamped_and_keep_defaults_on_garbage() -> None:
+    assert merge_config({"indie": {"design": {"rounds": 0}}}).design.rounds == 1
+    assert merge_config({"indie": {"design": {"rounds": 99}}}).design.rounds == 12
+    assert merge_config({"indie": {"design": {"options": 1}}}).design.options == 2
+    assert merge_config({"indie": {"design": {"options": 9}}}).design.options == 5
+    assert merge_config({"indie": {"design": {"rounds": "很多"}}}).design.rounds == 4
+    assert merge_config({"indie": {"design": {"options": True}}}).design.options == 3

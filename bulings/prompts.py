@@ -204,6 +204,117 @@ def knowledge_prompt(context: KnowledgeContext) -> str:
     return "\n".join(lines)
 
 
+@dataclass
+class GddContext:
+    """一轮策划案迭代需要的全部输入。"""
+
+    slug: str
+    title: str
+    brief_path: str
+    plan_path: str
+    doc_path: str
+    round_no: int
+    stage: str
+    stage_title: str
+    options_count: int
+    target_rounds: int
+    summary: str
+    decisions: list[str]
+    note: str
+    first_round: bool
+    constraints: str
+    protected_paths: list[str]
+
+
+def gdd_round_prompt(context: GddContext) -> str:
+    dev_spec = ".cursor/skills/indie-design"
+    lines = [
+        f"先阅读 {dev_spec}/SKILL.md，只做「一轮迭代」；需要时再看 {dev_spec}/dimensions.md 和 {dev_spec}/design-template.md。",
+        f"这是第 {context.round_no} 轮，本轮推进「{context.stage_title}」（阶段标识 {context.stage}）。",
+        "只写策划案和设计状态，不要写代码，不要建 tasks.json，不要开始做功能。",
+        "",
+        f"策划案名：{context.title}",
+        f"玩法灵感：{context.brief_path}（原文，不要改写它的本意）",
+        f"策划案文档（必须更新）：{context.doc_path}",
+        f"设计状态（必须更新）：{context.plan_path}",
+        "每轮建议轮次：" + f"{context.target_rounds} 轮（玩法 → 剧情 → 风格 → 流程 → 收尾），已经超过就提示开发者可以收尾。",
+    ]
+    if context.first_round:
+        lines += [
+            "",
+            "这是第一轮：先把灵感读成一份能看见核心乐趣的雏形——核心循环、玩家在做什么、为什么好玩，"
+            "写进策划案的概览和玩法部分，然后给出本轮的「玩法」选项。",
+        ]
+    else:
+        lines += ["", f"当前设计状态：", context.summary]
+        if context.decisions:
+            lines += ["", "开发者在上一轮做的选择（要落实进正文，并写进 chosen）：", *context.decisions]
+        else:
+            lines += ["", "开发者本轮没有选选项，只给了补充说明，按说明调整。"]
+        if context.note:
+            lines += ["", f"开发者的补充说明：{context.note}"]
+    lines += [
+        "",
+        "本轮要求：",
+        f"1. 针对「{context.stage_title}」给出 {context.options_count} 个开发者选项。选项要真正互斥、"
+        "能改变游戏长什么样，每个都写清代价；不要给「都要」「看情况」这类假选项。",
+        "2. 选项 id 用阶段字母加序号（例如玩法 G1/G2、剧情 S1/S2、风格 A1/A2、流程 F1/F2），"
+        "本轮内唯一，避免和上一轮重名。",
+        "3. 把已经确认的内容写进策划案对应章节，不要退化成选项清单；上一轮没定的地方保持「待定」并说明为什么。",
+        "4. 更新设计状态：round 写 " + str(context.round_no) + "；stage 写本轮推进的阶段；"
+        "status 写 iterating；options 填本轮选项；chosen 追加本轮的选择。"
+        "dimensions 里 gameplay/story/style/flow 四项都要在，写 summary 和 confirmed。",
+        "5. 不要在策划案里写实现细节（类名、目录、技术方案），那些留给框架阶段。",
+        "",
+        "项目约束（策划要落在工程做得到的范围内）：",
+        context.constraints,
+        "",
+        _protected_line(context.protected_paths),
+        "不要创建 git commit。不要修改 .meta 的 guid。不要动已有代码。",
+    ]
+    return "\n".join(line for line in lines if line != "")
+
+
+def gdd_finalize_prompt(context: GddContext) -> str:
+    skill = ".cursor/skills/indie-design"
+    lines = [
+        f"先阅读 {skill}/SKILL.md，只做「定稿」；策划案骨架按 {skill}/design-template.md。",
+        "这一轮不再给选项：把策划案补齐成可以直接交给开发的一版，然后收尾。",
+        "不要写代码，不要建 tasks.json，不要开始做功能。",
+        "",
+        f"这是第 {context.round_no} 轮（定稿轮）。",
+        f"策划案名：{context.title}",
+        f"玩法灵感：{context.brief_path}",
+        f"策划案文档（必须补齐）：{context.doc_path}",
+        f"设计状态（必须更新）：{context.plan_path}",
+        "",
+        "当前设计状态：",
+        context.summary,
+    ]
+    if context.decisions:
+        lines += ["", "开发者在最后一轮做的选择（要落实进正文，并写进 chosen）：", *context.decisions]
+    if context.note:
+        lines += ["", f"开发者的补充说明：{context.note}"]
+    lines += [
+        "",
+        "定稿要求：",
+        "1. 按骨架补齐：一页概览、核心循环、玩法系统、剧情与世界观、美术风格与音频、游戏流程与关卡节奏、"
+        "数值与内容规模、范围与里程碑、还没定的地方。",
+        "2. 状态写 round " + str(context.round_no) + "、stage 写 done、status 写 done、options 清空；"
+        "chosen 追加本轮的选择（有的话）。",
+        "3. 四个维度的 dimensions 都要写 summary 并标 confirmed；确实没法定下来的，在策划案的「还没定的地方」里写明缺什么、"
+        "以及什么时候必须定，不要用空话占位。",
+        "4. 「范围与里程碑」要按功能粒度给，能直接对上下一步的功能开发。",
+        "",
+        "项目约束：",
+        context.constraints,
+        "",
+        _protected_line(context.protected_paths),
+        "不要创建 git commit。不要修改 .meta 的 guid。不要动已有代码。",
+    ]
+    return "\n".join(line for line in lines if line != "")
+
+
 def _mcp_lines(context: PromptContext, phase: str) -> list[str]:
     if not context.unity_mcp_server:
         return []

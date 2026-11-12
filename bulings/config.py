@@ -19,6 +19,9 @@ DEFAULT_MCP_SERVER = "unity"
 DEFAULT_MCP_URL = "http://localhost:8080/mcp"
 DEFAULT_FRAMEWORK_PLAN = ".bulings/indie/framework.json"
 DEFAULT_FRAMEWORK_DOC = "Docs/AI/Frameworks/{game}.md"
+DEFAULT_GDD = "Docs/AI/GameDesigns/{feature}.md"
+DEFAULT_GDD_ROUNDS = 4
+DEFAULT_GDD_OPTIONS = 3
 _UNSAFE_FEATURE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _LEADING_DOTS = re.compile(r"^\.+")
 
@@ -79,6 +82,15 @@ class FrameworkConfig:
 
 
 @dataclass
+class DesignConfig:
+    """从灵感迭代策划案的设置。"""
+
+    path: str = DEFAULT_GDD
+    rounds: int = DEFAULT_GDD_ROUNDS
+    options: int = DEFAULT_GDD_OPTIONS
+
+
+@dataclass
 class WorkflowConfig:
     mode: WorkflowMode
     model: str
@@ -88,6 +100,7 @@ class WorkflowConfig:
     client_spec_path: str = DEFAULT_CLIENT_SPEC
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
     framework: FrameworkConfig = field(default_factory=FrameworkConfig)
+    design: DesignConfig = field(default_factory=DesignConfig)
 
 
 @dataclass
@@ -153,6 +166,7 @@ def merge_config(raw: object) -> WorkflowConfig:
     ui = _as_object(project.get("ui")) or {}
     indie = _as_object(root.get("indie")) or {}
     framework = _as_object(indie.get("framework")) or {}
+    design = _as_object(indie.get("design")) or {}
 
     return WorkflowConfig(
         unity_mcp=UnityMcpConfig(
@@ -171,6 +185,11 @@ def merge_config(raw: object) -> WorkflowConfig:
             plan=_non_empty_string(framework.get("plan"), DEFAULT_FRAMEWORK_PLAN),
             doc=_non_empty_string(framework.get("doc"), DEFAULT_FRAMEWORK_DOC),
             paradigm=_as_string(framework.get("paradigm")),
+        ),
+        design=DesignConfig(
+            path=_non_empty_string(design.get("path"), DEFAULT_GDD),
+            rounds=_as_int(design.get("rounds"), DEFAULT_GDD_ROUNDS, 1, 12),
+            options=_as_int(design.get("options"), DEFAULT_GDD_OPTIONS, 2, 5),
         ),
         client_spec_path=_non_empty_string(client_split.get("path"), DEFAULT_CLIENT_SPEC),
         mode="indie" if mode_raw == "indie" else "work",
@@ -298,6 +317,12 @@ def _non_empty_string(value: object, fallback: str) -> str:
 
 def _as_boolean(value: object, fallback: bool) -> bool:
     return value if isinstance(value, bool) else fallback
+
+
+def _as_int(value: object, fallback: int, low: int, high: int) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        return fallback
+    return min(max(value, low), high)
 
 
 def _as_string_array(value: object) -> list[str]:

@@ -22,13 +22,38 @@ from bulings.config import (
     to_project_path,
 )
 from bulings.framework import hook_aliases, plan_summary, read_framework_plan
+from bulings.gdd import (
+    GddOption,
+    design_brief_path,
+    design_plan_path,
+    dimension_title,
+    find_options,
+    gdd_summary,
+    option_ids,
+    parse_decisions,
+    pending_dimensions,
+    plan_status_lines,
+    read_gdd_plan,
+    stage_title,
+    validate_round,
+)
 from bulings.install import is_unity_project, mcp_server_entry
-from bulings.modes import ModeEnv, ModeStrategy, requires_prefab, skill_dir_for, strategy_for
+from bulings.modes import (
+    INDIE_DESIGN_SKILL_DIR,
+    ModeEnv,
+    ModeStrategy,
+    requires_prefab,
+    skill_dir_for,
+    strategy_for,
+)
 from bulings.prompts import (
     PromptContext,
+    GddContext,
     KnowledgeContext,
     SplitContext,
     format_project_constraints,
+    gdd_finalize_prompt,
+    gdd_round_prompt,
     knowledge_prompt,
     split_prompt,
 )
@@ -66,6 +91,19 @@ class KnowledgeCommand:
     project: str
     action: str
     name: str | None = None
+    model: str | None = None
+
+
+@dataclass
+class DesignCommand:
+    """策划案迭代：--idea 起第一轮，--decide/--note 推进，--finish 定稿。"""
+
+    project: str
+    idea: str | None = None
+    name: str | None = None
+    decide: str | None = None
+    note: str | None = None
+    finish: bool = False
     model: str | None = None
 
 
@@ -288,6 +326,185 @@ def knowledge_workflow(command: KnowledgeCommand) -> int:
         return 2
     print(f"知识库 {command.action} 完成，根目录 {config.knowledge.root}")
     return 0
+
+
+def design_workflow(command: DesignCommand) -> int:
+    """从玩法灵感迭代策划案。一轮一次 Agent，状态全在 design.json 里。"""
+    project_root = os.path.abspath(command.project)
+    unity_error = _unity_check(project_root)
+    if unity_error != 0:
+        return unity_error
+
+    config = load_workflow_config(project_root)
+    if config.mode != "indie":
+        print("策划案迭代只在独游模式使用。把 workflow.yaml 的 mode 改成 indie 再试。", file=sys.stderr)
+        return 1
+
+    idea_text, idea_source = _read_idea(command.idea, project_root)
+    name = (command.name or "").strip()
+    if not name and idea_source:
+        name = Path(idea_source).stem
+    if not name:
+        print("缺少策划案名：用一段文字当灵感时请给 --name <名字>。", file=sys.stderr)
+        return 1
+    slug = feature_token(name)
+
+    plan_path = design_plan_path(project_root, slug)
+    brief_path = design_brief_path(project_root, slug)
+    doc_path = resolve_doc_path(config.design.path, slug, project_root)
+    previous = read_gdd_plan(plan_path)
+    wanted = parse_decisions(command.decide) if command.decide else []
+    note = (command.note or "").strip()
+
+    if command.idea and previous is not None:
+        print(
+            f"{slug} 已经有第 {previous.round} 轮的策划案。继续用 --decide / --note，定稿用 --finish；"
+            "要重来请换一个 --name。",
+            file=sys.stderr,
+        )
+        return 1
+    if previous is None and not command.idea:
+        print(f"还没有 {slug} 的策划案。先用 --idea 起第一轮。", file=sys.stderr)
+        return 1
+
+    found: list[GddOption] = []
+    if wanted:
+        assert previous is not None
+        found, missing = find_options(previous, wanted)
+        if missing:
+            print("这些选项不在当前这一轮里：" + "、".join(missing), file=sys.stderr)
+            available = "、".join(sorted(option_ids(previous))) or "（这一轮没有选项）"
+            print(f"可选的 id：{available}", file=sys.stderr)
+            return 1
+
+    if not command.idea and not wanted and not note and not command.finish:
+        assert previous is not None
+        _print_design_status(project_root, previous, slug)
+        return 0
+
+    if _ensure_skill(project_root, INDIE_DESIGN_SKILL_DIR) != 0:
+        return 1
+    api_key = _require_api_key()
+    if not api_key:
+        return 1
+
+    if idea_text is not None:
+        _write_design_brief(brief_path, idea_text, idea_source, project_root)
+
+    round_no = previous.round + 1 if previous is not None else 1
+    stage = _next_design_stage(previous)
+    context = GddContext(
+        slug=slug,
+        title=(previous.title if previous is not None else slug),
+        brief_path=to_project_path(project_root, str(brief_path)),
+        plan_path=to_project_path(project_root, str(plan_path)),
+        doc_path=to_project_path(project_root, doc_path),
+        round_no=round_no,
+        stage=stage,
+        stage_title=stage_title(stage),
+        options_count=config.design.options,
+        target_rounds=config.design.rounds,
+        summary=gdd_summary(previous),
+        decisions=[_decision_line(option) for option in found],
+        note=note,
+        first_round=previous is None,
+        constraints=format_project_constraints(config.project, "", "indie-design"),
+        protected_paths=list(config.project.protected_paths),
+    )
+    prompt = gdd_finalize_prompt(context) if command.finish else gdd_round_prompt(context)
+    model = (command.model or "").strip() or config.model
+
+    try:
+        with Agent.create(
+            model=model,
+            api_key=api_key,
+            local=LocalAgentOptions(cwd=project_root, setting_sources=["project"]),
+        ) as agent:
+            print(f"agentId={agent.agent_id}", flush=True)
+            print(f"[策划案] 第 {round_no} 轮开始（{context.stage_title}）", file=sys.stderr)
+            code = _send_plain(agent, prompt)
+    except CursorAgentError as error:
+        return _handle_startup_error(error)
+    if code != 0:
+        return code
+
+    current = read_gdd_plan(plan_path)
+    if current is None:
+        print(
+            f"第 {round_no} 轮结束，但 {context.plan_path} 不合法或没写出来，已停止。",
+            file=sys.stderr,
+        )
+        return 2
+    errors = validate_round(previous, current, wanted)
+    if errors:
+        print(f"第 {round_no} 轮没有推进到位，已停止：", file=sys.stderr)
+        for item in errors:
+            print(f"- {item}", file=sys.stderr)
+        return 2
+
+    if command.finish:
+        if current.status != "done":
+            print("定稿那一轮 status 必须写成 done。", file=sys.stderr)
+            return 2
+        if not os.path.isfile(doc_path) or os.path.getsize(doc_path) == 0:
+            print(f"定稿结束，但 {context.doc_path} 不存在或是空的。", file=sys.stderr)
+            return 2
+        print(f"策划案已定稿：{context.doc_path}")
+        print(f"接着做：bulings run --project <Unity工程> --design {context.doc_path} --name {slug}")
+        return 0
+
+    _print_design_status(project_root, current, slug)
+    return 0
+
+
+def _read_idea(raw: str | None, project_root: str) -> tuple[str | None, str | None]:
+    """--idea 既可以是文件路径，也可以是一段文字。返回 (文本, 来源文件)。"""
+    if not raw:
+        return None, None
+    for candidate in (raw, os.path.join(project_root, raw)):
+        if os.path.isfile(candidate):
+            return Path(candidate).read_text(encoding="utf-8"), os.path.abspath(candidate)
+    return raw, None
+
+
+def _write_design_brief(
+    brief_path: Path,
+    text: str,
+    source: str | None,
+    project_root: str,
+) -> None:
+    brief_path.parent.mkdir(parents=True, exist_ok=True)
+    source_line = f"来源：{to_project_path(project_root, source)}" if source else "来源：命令行 --idea"
+    content = "\n".join(["# 玩法灵感", "", source_line, "", text.rstrip(), ""])
+    brief_path.write_text(content, encoding="utf-8", newline="\n")
+
+
+def _next_design_stage(previous: Any) -> str:
+    """这一轮该推进哪个阶段：按 玩法 → 剧情 → 风格 → 流程 → 收尾 走。"""
+    if previous is None:
+        return "core"
+    mapping = {"gameplay": "core", "story": "story", "style": "style", "flow": "flow"}
+    pending = pending_dimensions(previous)
+    return mapping[pending[0]] if pending else "polish"
+
+
+def _decision_line(option: GddOption) -> str:
+    parts = [f"- {option.id}（{dimension_title(option.dimension)}）{option.label}"]
+    if option.detail:
+        parts.append(f"：{option.detail}")
+    if option.tradeoff:
+        parts.append(f"；代价：{option.tradeoff}")
+    return "".join(parts)
+
+
+def _print_design_status(project_root: str, plan: Any, slug: str) -> None:
+    for line in plan_status_lines(plan):
+        print(line)
+    if plan.options:
+        print("下一步：bulings design --project <Unity工程> --name " + slug + " --decide <id>[,<id>]")
+        print('       补充想法：--note "..."；定稿：--finish；只看状态：不带参数再跑一次')
+    else:
+        print('这一轮没有新选项。用 --note 补充，或 --finish 定稿。')
 
 
 def resume_workflow(command: ResumeCommand) -> int:

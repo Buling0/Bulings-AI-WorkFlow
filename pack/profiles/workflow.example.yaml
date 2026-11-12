@@ -31,14 +31,19 @@ knowledge:
 clientSplit:
   path: Docs/AI/ClientSpecs/{feature}.md
 
-# 独游模式（mode: indie）：第一次 run 先建立框架基线，再按纵向切片做功能。
-# enabled: false 或命令行 --no-framework 时跳过框架阶段，直接按功能实现。
+# 独游模式（mode: indie）：先用 bulings design 从灵感迭代出策划案，
+# 第一次 run 再建立框架基线，然后按纵向切片做功能。
+# framework.enabled: false 或命令行 --no-framework 时跳过框架阶段。
 indie:
   framework:
     enabled: true
     plan: .bulings/indie/framework.json
     doc: Docs/AI/Frameworks/{game}.md
     paradigm: ""
+  design:
+    path: Docs/AI/GameDesigns/{feature}.md
+    rounds: 4          # 建议轮次：玩法 → 剧情 → 风格 → 流程
+    options: 3         # 每轮给几个开发者选项，2-5
 
 project:
   codeRoots: []

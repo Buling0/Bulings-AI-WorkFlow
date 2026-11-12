@@ -14,6 +14,7 @@ from bulings.tasks import FeatureTask, TaskFile
 
 WORK_SKILL_DIR = ".cursor/skills/work-feature"
 INDIE_SKILL_DIR = ".cursor/skills/indie-feature"
+INDIE_DESIGN_SKILL_DIR = ".cursor/skills/indie-design"
 SKILL_DIRS = {"work": WORK_SKILL_DIR, "indie": INDIE_SKILL_DIR}
 MODES = ("work", "indie")
 

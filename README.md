@@ -70,7 +70,7 @@ bulings resume --project <Unity工程> --run <功能名>
 
 ## 独游模式
 
-`workflow.yaml` 写 `mode: indie` 就用独游流程，命令还是 `run` / `resume`。它比工作模式多一道**框架阶段**，少一些公司流程的硬要求：
+`workflow.yaml` 写 `mode: indie` 就用独游流程。它比工作模式多两道阶段：先是**策划案迭代**（`bulings design`，见下一节），然后是 **run 里的框架阶段**：
 
 1. **建立框架**：工程里还没有可用的 `.bulings/indie/framework.json` 时，先落一套能承接新玩法的骨架（启动与生命周期、服务、事件、状态、配置、存档），写框架清单和框架文档。这一阶段不写玩法功能。
 2. **拆切片**：按纵向切片拆功能，一项任务 = 一条能自己验收完的能力。每项必须写 `framework`，取值来自框架的系统 id 或扩展点名；框架里还没有的写 `new: <说明>`。
@@ -89,6 +89,25 @@ bulings run --project <Unity工程> --design <策划案> [--name <功能名>]
 - 独游模式下 `bulings split` 会拒绝执行；`bulings kb` 可以照常用。
 
 框架选型、最小基线、反模式和产物格式见 [docs/独游模式说明.md](docs/独游模式说明.md)，装进工程的规则在 `.cursor/skills/indie-feature/`。
+
+## 策划案迭代
+
+只有玩法灵感、还没有策划案时，先跑这条流程。一轮推进一个维度（玩法 → 剧情 → 风格 → 流程 → 收尾），每轮给你几个有代价的选项，选完再写厚一点，最后定稿：
+
+```powershell
+bulings design --project <Unity工程> --idea <灵感文件或一段文字> [--name <策划案名>]
+bulings design --project <Unity工程> --name <策划案名> --decide G1[,S2]
+bulings design --project <Unity工程> --name <策划案名> --note "想再休闲一点"
+bulings design --project <Unity工程> --name <策划案名> --finish
+```
+
+- 每轮结束会把当前选项和「下一步该敲什么」打印出来；不带参数再跑一次可以只看进度。
+- `--idea` 既可以是文件路径，也可以直接是一段文字（这时要给 `--name`）。
+- 选项 id 用阶段字母加序号：玩法 `G1`、剧情 `S1`、风格 `A1`、流程 `F1`。选了不存在的 id 会直接拒绝并列出可用选项。
+- 工作流会校验这一轮真的推进了：`round` 必须是上一轮 +1、迭代中的一轮至少 2 个选项、选过的 id 必须写进 `chosen`、定稿时 `status` 必须是 `done` 且不再给选项。
+- 定稿后打印 `bulings run --design` 的下一步命令，直接进入框架和功能开发。
+
+产物：设计状态 `.bulings/design/<策划案名>/design.json`、灵感原文同目录 `brief.md`、策划案正文默认 `Docs/AI/GameDesigns/<策划案名>.md`。规则在 `.cursor/skills/indie-design/`。
 
 ## 接入 Unity MCP
 
@@ -149,6 +168,10 @@ indie:
     plan: .bulings/indie/framework.json
     doc: Docs/AI/Frameworks/{game}.md   # {game} 取工程目录名
     paradigm: ""       # 留空由 Agent 按 frameworks.md 选型
+  design:               # 仅 mode: indie 时使用，bulings design 的配置
+    path: Docs/AI/GameDesigns/{feature}.md
+    rounds: 4          # 建议轮次：玩法 → 剧情 → 风格 → 流程
+    options: 3         # 每轮给几个选项，2-5
 docs:
   devSpec:
     enabled: true
@@ -169,13 +192,13 @@ project:
   protectedPaths: []    # 这些路径不允许改
 ```
 
-`mode: work` 是默认值，行为和之前一样。`mode: indie` 时 `run` / `resume` 走独游流程（先立框架，再按切片做功能），详见上文和 [独游模式说明](docs/独游模式说明.md)。
+`mode: work` 是默认值，行为和之前一样。`mode: indie` 时先用 `bulings design` 迭代出策划案，`run` / `resume` 再走独游流程（先立框架，再按切片做功能），详见上文和 [独游模式说明](docs/独游模式说明.md)。
 
 ## 退出码
 
 - `0`：完成
 - `1`：没有启动（参数、配置、密钥，或启动 Agent 失败）
-- `2`：已经启动但没有做完（这一轮失败或被取消、任务阻塞，或 `tasks.json` / `framework.json` 不合法）
+- `2`：已经启动但没有做完（这一轮失败或被取消、任务阻塞，或 `tasks.json` / `framework.json` / `design.json` 不合法）
 
 ## 本版本不做的事
 

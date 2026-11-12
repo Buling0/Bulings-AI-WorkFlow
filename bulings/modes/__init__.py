@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from bulings.modes.base import (
+    INDIE_DESIGN_SKILL_DIR,
     INDIE_SKILL_DIR,
     WORK_SKILL_DIR,
     ModeEnv,
@@ -24,6 +25,7 @@ def strategy_for(mode: str, context: PromptContext) -> ModeStrategy:
 
 
 __all__ = [
+    "INDIE_DESIGN_SKILL_DIR",
     "INDIE_SKILL_DIR",
     "WORK_SKILL_DIR",
     "ModeEnv",

@@ -25,10 +25,16 @@ def test_init_overwrites_skills_and_keeps_existing_workflow() -> None:
         assert indie_path.is_file()
         assert "mode: work" in config_path.read_text(encoding="utf-8")
         assert "独游" in config_path.read_text(encoding="utf-8")
+        assert "GameDesigns" in config_path.read_text(encoding="utf-8")
         assert "策划案" in skill_path.read_text(encoding="utf-8")
         assert "建立框架" in indie_path.read_text(encoding="utf-8")
         for name in ("frameworks.md", "framework-template.md", "slice-spec-template.md", "feature-doc-template.md"):
             assert (indie_path.parent / name).is_file()
+        design_skill = project / ".cursor" / "skills" / "indie-design" / "SKILL.md"
+        assert design_skill.is_file()
+        assert "选项" in design_skill.read_text(encoding="utf-8")
+        for name in ("dimensions.md", "design-template.md"):
+            assert (design_skill.parent / name).is_file()
 
         config_path.write_text("mode: indie\n", encoding="utf-8")
         skill_path.write_text("stale\n", encoding="utf-8")

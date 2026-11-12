@@ -11,6 +11,9 @@ from bulings.install import install_workflow, is_unity_project
 
 HELP_TEXT = """用法
   bulings init --project <Unity工程>
+  bulings design --project <Unity工程> --idea <灵感文件或一段文字> [--name <策划案名>] [--model <模型>]
+  bulings design --project <Unity工程> --name <策划案名> --decide <选项id>[,<选项id>] [--note "补充想法"] [--model <模型>]
+  bulings design --project <Unity工程> --name <策划案名> --finish
   bulings run --project <Unity工程> --design <策划案> [--prefab <预制体> ...] [--name <功能名>] [--dev-spec <路径>] [--feature-doc <路径>] [--no-dev-spec] [--no-feature-doc] [--no-framework] [--model <模型>]
   bulings split --project <Unity工程> --design <策划案> [--name <功能名>] [--output <路径>] [--model <模型>]
   bulings kb --project <Unity工程> --action <init|update|check> [--name <功能名>] [--model <模型>]
@@ -18,7 +21,12 @@ HELP_TEXT = """用法
 
 模式
   workflow.yaml 的 mode: work 时按任务清单做功能，至少要给一个 --prefab。
-  mode: indie 时第一次 run 先建框架（.bulings/indie/framework.json），再按切片做功能，可以不给 --prefab。
+  mode: indie 时先用 design 迭代出策划案，第一次 run 再建框架（.bulings/indie/framework.json），
+  然后按切片做功能；run 可以不给 --prefab。
+
+策划案迭代（仅 mode: indie）
+  --idea 起第一轮，之后用 --decide 选选项、--note 补充想法，--finish 定稿。
+  不带 --idea/--decide/--note/--finish 时只打印当前进度和可选选项。
 
 环境变量
   CURSOR_API_KEY   Cursor 用户 API key
@@ -26,7 +34,7 @@ HELP_TEXT = """用法
 退出码
   0  完成
   1  未能启动（参数、配置、密钥或 CursorAgentError）
-  2  已开始但没有完成（Agent 失败、任务阻塞，或 tasks.json / framework.json 不合法）"""
+  2  已开始但没有完成（Agent 失败、任务阻塞，或 tasks.json / framework.json / design.json 不合法）"""
 
 
 class BulingsUsageError(Exception):
@@ -57,6 +65,10 @@ class ParsedArgs:
     run: str | None = None
     output: str | None = None
     action: str | None = None
+    idea: str | None = None
+    decide: str | None = None
+    note: str | None = None
+    finish: bool = False
     help: bool = False
 
 
@@ -102,6 +114,8 @@ def dispatch(argv: list[str]) -> int:
         return init_command(project)
     if args.command == "run":
         return run_command(args, project)
+    if args.command == "design":
+        return design_command(args, project)
     if args.command == "split":
         return split_command(args, project)
     if args.command == "kb":
@@ -150,6 +164,25 @@ def run_command(args: ParsedArgs, project: str) -> int:
                 no_feature_doc=args.no_feature_doc,
                 no_framework=args.no_framework,
             ),
+        )
+    )
+
+
+def design_command(args: ParsedArgs, project: str) -> int:
+    if not (args.idea or args.decide or args.note or args.finish or args.name):
+        print("至少给 --idea <灵感文件或文字>、--name <策划案名> 或 --decide <选项 id> 其中之一", file=sys.stderr)
+        return 1
+    from bulings.runner import DesignCommand, design_workflow
+
+    return design_workflow(
+        DesignCommand(
+            project=project,
+            idea=args.idea,
+            name=args.name,
+            decide=args.decide,
+            note=args.note,
+            finish=args.finish,
+            model=args.model,
         )
     )
 
@@ -203,6 +236,10 @@ def parse_args(argv: list[str]) -> ParsedArgs:
         run=namespace.run_slug,
         output=namespace.output,
         action=namespace.action,
+        idea=namespace.idea,
+        decide=namespace.decide,
+        note=namespace.note,
+        finish=namespace.finish,
         help=namespace.help,
     )
 
@@ -213,7 +250,7 @@ def print_help() -> None:
 
 def _build_parser() -> BulingsParser:
     parser = BulingsParser(prog="bulings", add_help=False, allow_abbrev=False)
-    parser.add_argument("command", nargs="?", choices=["init", "run", "split", "kb", "resume"])
+    parser.add_argument("command", nargs="?", choices=["init", "run", "design", "split", "kb", "resume"])
     parser.add_argument("--help", "-h", action="store_true")
     parser.add_argument("--project")
     parser.add_argument("--design")
@@ -224,6 +261,10 @@ def _build_parser() -> BulingsParser:
     parser.add_argument("--output")
     parser.add_argument("--action")
     parser.add_argument("--run", dest="run_slug")
+    parser.add_argument("--idea")
+    parser.add_argument("--decide")
+    parser.add_argument("--note")
+    parser.add_argument("--finish", action="store_true")
     parser.add_argument("--no-dev-spec", action="store_true")
     parser.add_argument("--no-feature-doc", action="store_true")
     parser.add_argument("--no-framework", action="store_true")
