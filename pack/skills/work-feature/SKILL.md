@@ -7,7 +7,7 @@ description: 根据策划案和 Unity 预制体整理开发任务并逐项写代
 
 用于公司 Unity 工程。输入是一份策划案和相关预制体。先列出可逐项完成的任务，再写代码，并按配置决定要不要留下两份中文文档。
 
-`.bulings/workflow.yaml` 的 `mode` 为 `indie` 时停止，不要在这里做独游流程。
+`.bulings/workflow.yaml` 的 `mode` 为 `indie` 时不要在这里做，改用 `indie-feature` Skill（独游模式先立框架，再按纵向切片做功能）。
 
 ## 配置
 

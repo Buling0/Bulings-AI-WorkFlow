@@ -90,3 +90,66 @@ def test_knowledge_map_is_only_offered_when_enabled_and_present() -> None:
 
         text = format_project_constraints(merge_config({}).project, found)
         assert "知识库地图：Docs/AI/Knowledge/MAP.md" in text
+
+
+def test_indie_framework_defaults_match_the_example_profile() -> None:
+    config = merge_config({"mode": "indie"})
+    assert config.framework.enabled is True
+    assert config.framework.plan == ".bulings/indie/framework.json"
+    assert config.framework.doc == "Docs/AI/Frameworks/{game}.md"
+    assert config.framework.paradigm == ""
+
+
+def test_indie_framework_can_be_overridden() -> None:
+    config = merge_config(
+        {
+            "mode": "indie",
+            "indie": {
+                "framework": {
+                    "enabled": False,
+                    "plan": "Tools/fw.json",
+                    "doc": "Docs/FW/{game}.md",
+                    "paradigm": "QFramework",
+                }
+            },
+        }
+    )
+    assert config.framework.enabled is False
+    assert config.framework.plan == "Tools/fw.json"
+    assert config.framework.doc == "Docs/FW/{game}.md"
+    assert config.framework.paradigm == "QFramework"
+
+
+def test_resolve_template_expands_game_and_feature() -> None:
+    from bulings.config import resolve_template
+
+    root = os.path.join("C:\\", "unity", "Tower Defense")
+    assert resolve_template("Docs/{game}/{feature}.md", {"game": "tower-defense", "feature": "bag"}, root) == (
+        os.path.normpath(os.path.join(root, "Docs", "tower-defense", "bag.md"))
+    )
+    assert resolve_template("Docs/plain.md", {"game": "x"}, root) == os.path.normpath(
+        os.path.join(root, "Docs", "plain.md")
+    )
+
+
+def test_indie_framework_plan_uses_game_token_from_the_project_directory() -> None:
+    root = os.path.join("C:\\", "unity", "My Game")
+    resolved = resolve_run_config(merge_config({"mode": "indie"}), root, "背包", RunOverrides())
+    assert resolved.framework_enabled is True
+    assert resolved.framework_plan_path == os.path.normpath(
+        os.path.join(root, ".bulings", "indie", "framework.json")
+    )
+    assert resolved.framework_doc_path == os.path.normpath(
+        os.path.join(root, "Docs", "AI", "Frameworks", "My Game.md")
+    )
+
+    disabled = resolve_run_config(merge_config({"mode": "indie"}), root, "背包", RunOverrides(no_framework=True))
+    assert disabled.framework_enabled is False
+
+
+def test_work_mode_keeps_the_framework_switch_and_its_own_paths() -> None:
+    root = os.path.join("C:\\", "unity", "game")
+    resolved = resolve_run_config(merge_config({"mode": "work"}), root, "背包", RunOverrides())
+    assert resolved.game == "game"
+    assert resolved.framework_enabled is True
+    assert resolved.feature_doc_path == os.path.normpath(os.path.join(root, "Docs", "AI", "Features", "背包.md"))

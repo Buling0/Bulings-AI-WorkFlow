@@ -21,15 +21,14 @@ from bulings.config import (
     resolve_run_config,
     to_project_path,
 )
+from bulings.framework import hook_aliases, plan_summary, read_framework_plan
 from bulings.install import is_unity_project, mcp_server_entry
+from bulings.modes import ModeEnv, ModeStrategy, requires_prefab, skill_dir_for, strategy_for
 from bulings.prompts import (
     PromptContext,
-    analyze_prompt,
-    document_prompt,
-    format_project_constraints,
     KnowledgeContext,
     SplitContext,
-    implement_prompt,
+    format_project_constraints,
     knowledge_prompt,
     split_prompt,
 )
@@ -91,6 +90,11 @@ class RunState:
     agent_id: str | None = None
     current_task_id: str | None = None
     last_run_id: str | None = None
+    mode: str = "work"
+    game: str = ""
+    framework_enabled: bool = False
+    framework_plan_path: str = ""
+    framework_doc_path: str = ""
 
 
 def run_workflow(command: RunCommand) -> int:
@@ -100,8 +104,9 @@ def run_workflow(command: RunCommand) -> int:
         return unity_error
 
     config = load_workflow_config(project_root)
-    if config.mode == "indie":
-        return _indie_stop()
+    if requires_prefab(config.mode) and not command.prefabs:
+        print("工作模式至少提供一个 --prefab <预制体>（独游模式可以不给）。", file=sys.stderr)
+        return 1
 
     design_path = _resolve_existing_file(command.design, project_root)
     prefabs = [_resolve_existing_file(item, project_root) for item in command.prefabs]
@@ -121,6 +126,11 @@ def run_workflow(command: RunCommand) -> int:
         feature_doc_path=resolved.feature_doc_path,
         model=resolved.model,
         phase="analyze",
+        mode=config.mode,
+        game=resolved.game,
+        framework_enabled=resolved.framework_enabled,
+        framework_plan_path=resolved.framework_plan_path,
+        framework_doc_path=resolved.framework_doc_path,
     )
 
     existing = _read_state(_state_path(project_root, state.slug))
@@ -131,7 +141,7 @@ def run_workflow(command: RunCommand) -> int:
         )
         return 1
 
-    if _ensure_skill(project_root) != 0:
+    if _ensure_skill(project_root, skill_dir_for(state.mode)) != 0:
         return 1
 
     api_key = _require_api_key()
@@ -160,7 +170,12 @@ def split_workflow(command: SplitCommand) -> int:
 
     config = load_workflow_config(project_root)
     if config.mode == "indie":
-        return _indie_stop()
+        print(
+            "前端分离只在工作模式使用。独游工程需要分离时，把 workflow.yaml 的 mode 临时改成 work "
+            "跑一次 split，再改回 indie。",
+            file=sys.stderr,
+        )
+        return 1
 
     design_path = _resolve_existing_file(command.design, project_root)
     feature = feature_token(command.name if command.name and command.name.strip() else feature_from_design(design_path))
@@ -226,8 +241,6 @@ def knowledge_workflow(command: KnowledgeCommand) -> int:
         return 1
 
     config = load_workflow_config(project_root)
-    if config.mode == "indie":
-        return _indie_stop()
     if not config.knowledge.enabled:
         print("workflow.yaml 里 knowledge.enabled 为 false，知识库未启用。", file=sys.stderr)
         return 1
@@ -296,10 +309,15 @@ def resume_workflow(command: ResumeCommand) -> int:
         return 0
 
     config = load_workflow_config(project_root)
-    if config.mode == "indie":
-        return _indie_stop()
+    if state.mode != config.mode:
+        print(
+            f"运行 {slug} 是按 {state.mode} 模式建立的，当前 workflow.yaml 是 {config.mode}。"
+            f"把 mode 改回 {state.mode} 再继续，或另开一次运行。",
+            file=sys.stderr,
+        )
+        return 1
 
-    if _ensure_skill(project_root) != 0:
+    if _ensure_skill(project_root, skill_dir_for(state.mode)) != 0:
         return 1
 
     api_key = _require_api_key()
@@ -328,8 +346,13 @@ def _drive(
     project: ProjectProfile,
     resuming: bool,
 ) -> int:
+    strategy = strategy_for(state.mode, _prompt_context(project_root, state, project))
+    prepared = _run_prepare(agent, project_root, state, strategy)
+    if prepared != 0:
+        return prepared
+
     if state.phase == "analyze":
-        analyzed = _run_analyze(agent, project_root, state, project)
+        analyzed = _run_analyze(agent, project_root, state, project, strategy)
         if analyzed != 0:
             return analyzed
         resuming = False
@@ -340,7 +363,7 @@ def _drive(
     if state.phase == "implement":
         if resuming:
             _reopen_if_needed(project_root, state)
-        implemented = _run_implement(agent, project_root, state, project)
+        implemented = _run_implement(agent, project_root, state, project, strategy)
         if implemented != 0:
             return implemented
 
@@ -354,7 +377,7 @@ def _drive(
     state.phase = "document"
     state.current_task_id = None
     _save_state(project_root, state)
-    documented = _run_document(agent, project_root, state, project)
+    documented = _run_document(agent, project_root, state, project, strategy)
     if documented != 0:
         return documented
 
@@ -364,10 +387,45 @@ def _drive(
     return 0
 
 
-def _run_analyze(agent: Any, project_root: str, state: RunState, project: ProjectProfile) -> int:
+def _run_prepare(agent: Any, project_root: str, state: RunState, strategy: ModeStrategy) -> int:
+    """模式自己的前置阶段。独游模式靠它在写功能前建立框架。"""
+    if strategy.prepare is None:
+        return 0
+
+    def send(prompt: str) -> int:
+        return _send(agent, project_root, state, prompt)
+
+    def save_state() -> None:
+        _save_state(project_root, state)
+
+    env = ModeEnv(
+        project_root=project_root,
+        context=_prompt_context(project_root, state, load_workflow_config(project_root).project),
+        save_state=save_state,
+        send=send,
+    )
+    resumed_phase = "analyze" if state.phase in ("framework", "analyze") else state.phase
+    state.phase = "framework"
+    _save_state(project_root, state)
+    code = strategy.prepare(env)
+    if code != 0:
+        return code
+    state.phase = resumed_phase
+    _save_state(project_root, state)
+    return 0
+
+
+def _run_analyze(
+    agent: Any,
+    project_root: str,
+    state: RunState,
+    project: ProjectProfile,
+    strategy: ModeStrategy,
+) -> int:
     _run_directory(project_root, state.slug).mkdir(parents=True, exist_ok=True)
     print("[分析] 开始", file=sys.stderr)
-    code = _send(agent, project_root, state, analyze_prompt(_prompt_context(project_root, state, project)))
+    context = _prompt_context(project_root, state, project)
+    code = _send(agent, project_root, state, strategy.analyze_prompt(context))
     if code != 0:
         return code
 
@@ -378,6 +436,17 @@ def _run_analyze(agent: Any, project_root: str, state: RunState, project: Projec
         print("分析结束但没有合法的 tasks.json，已停止，未进入写代码。", file=sys.stderr)
         return 2
 
+    if strategy.validate_tasks is not None:
+        errors = strategy.validate_tasks(tasks, context)
+        if errors:
+            state.phase = "analyze"
+            _save_state(project_root, state)
+            print("分析结束但切片没有挂在框架上，已停止，未进入写代码：", file=sys.stderr)
+            for item in errors:
+                print(f"- {item}", file=sys.stderr)
+            print(_resume_hint(project_root, state.slug), file=sys.stderr)
+            return 2
+
     state.phase = "implement"
     _save_state(project_root, state)
     if any(task.status == "blocked" for task in tasks.tasks):
@@ -385,7 +454,13 @@ def _run_analyze(agent: Any, project_root: str, state: RunState, project: Projec
     return 0
 
 
-def _run_implement(agent: Any, project_root: str, state: RunState, project: ProjectProfile) -> int:
+def _run_implement(
+    agent: Any,
+    project_root: str,
+    state: RunState,
+    project: ProjectProfile,
+    strategy: ModeStrategy,
+) -> int:
     tasks_path = _tasks_file(project_root, state.slug)
     while True:
         task_file = read_task_file(tasks_path)
@@ -426,7 +501,7 @@ def _run_implement(agent: Any, project_root: str, state: RunState, project: Proj
             agent,
             project_root,
             state,
-            implement_prompt(
+            strategy.implement_prompt(
                 _prompt_context(project_root, state, project),
                 nxt.task,
                 nxt.retry or bool(nxt.task.blocked_reason),
@@ -448,13 +523,19 @@ def _run_implement(agent: Any, project_root: str, state: RunState, project: Proj
             return 2
 
 
-def _run_document(agent: Any, project_root: str, state: RunState, project: ProjectProfile) -> int:
+def _run_document(
+    agent: Any,
+    project_root: str,
+    state: RunState,
+    project: ProjectProfile,
+    strategy: ModeStrategy,
+) -> int:
     task_file = read_task_file(_tasks_file(project_root, state.slug))
     if task_file is None or select_next_task(task_file.tasks).kind != "done":
         print("还有未完成的任务，不写功能说明。", file=sys.stderr)
         return 2
     print("[功能说明] 开始", file=sys.stderr)
-    return _send(agent, project_root, state, document_prompt(_prompt_context(project_root, state, project)))
+    return _send(agent, project_root, state, strategy.document_prompt(_prompt_context(project_root, state, project)))
 
 
 def _send_plain(agent: Any, prompt: str) -> int:
@@ -537,6 +618,8 @@ def _prompt_context(project_root: str, state: RunState, project: ProjectProfile)
     mcp = full_config.unity_mcp
     kb_map = knowledge_map_path(full_config, project_root) or ""
     mcp_server = mcp.server if mcp.enabled and mcp_server_entry(mcp) is not None else ""
+    skill_name = "indie-feature" if state.mode == "indie" else "work-feature"
+    plan = _framework_plan(project_root, state)
     return PromptContext(
         feature=state.feature,
         slug=state.slug,
@@ -547,12 +630,27 @@ def _prompt_context(project_root: str, state: RunState, project: ProjectProfile)
         feature_doc_enabled=state.feature_doc_enabled,
         dev_spec_path=to_project_path(project_root, state.dev_spec_path),
         feature_doc_path=to_project_path(project_root, state.feature_doc_path),
-        constraints=format_project_constraints(project, kb_map),
+        constraints=format_project_constraints(project, kb_map, skill_name),
         protected_paths=list(project.protected_paths),
         unity_mcp_server=mcp_server,
         knowledge_root=full_config.knowledge.root,
         knowledge_map=kb_map,
+        mode=state.mode,
+        game=state.game or state.slug,
+        framework_enabled=state.framework_enabled,
+        framework_plan_path=to_project_path(project_root, state.framework_plan_path) if state.framework_plan_path else "",
+        framework_doc_path=to_project_path(project_root, state.framework_doc_path) if state.framework_doc_path else "",
+        framework_summary=plan_summary(plan) if plan is not None else "",
+        framework_hooks=hook_aliases(plan) if plan is not None else "",
+        framework_paradigm=full_config.framework.paradigm,
+        project_root=project_root,
     )
+
+
+def _framework_plan(project_root: str, state: RunState) -> Any:
+    if not state.framework_enabled or not state.framework_plan_path:
+        return None
+    return read_framework_plan(state.framework_plan_path)
 
 
 def _handle_startup_error(error: CursorAgentError) -> int:
@@ -569,16 +667,11 @@ def _unity_check(project_root: str) -> int:
     return 1
 
 
-def _indie_stop() -> int:
-    print("独游模式本版本未实现，停止，不要擅自开工。", file=sys.stderr)
-    return 1
-
-
-def _ensure_skill(project_root: str) -> int:
-    skill = Path(project_root) / ".cursor" / "skills" / "work-feature" / "SKILL.md"
+def _ensure_skill(project_root: str, skill_dir: str) -> int:
+    skill = Path(project_root) / skill_dir / "SKILL.md"
     if skill.exists():
         return 0
-    print("工程里还没有工作模式 Skill。请先执行 bulings init --project <Unity工程>", file=sys.stderr)
+    print(f"工程里还没有 {Path(skill_dir).name} Skill。请先执行 bulings init --project <Unity工程>", file=sys.stderr)
     return 1
 
 
@@ -663,6 +756,11 @@ def _read_state(file_path: Path) -> RunState | None:
         phase=parsed["phase"],
         current_task_id=parsed.get("currentTaskId") if isinstance(parsed.get("currentTaskId"), str) else None,
         last_run_id=parsed.get("lastRunId") if isinstance(parsed.get("lastRunId"), str) else None,
+        mode=parsed["mode"] if isinstance(parsed.get("mode"), str) else "work",
+        game=parsed["game"] if isinstance(parsed.get("game"), str) else "",
+        framework_enabled=parsed.get("frameworkEnabled") if isinstance(parsed.get("frameworkEnabled"), bool) else False,
+        framework_plan_path=parsed["frameworkPlanPath"] if isinstance(parsed.get("frameworkPlanPath"), str) else "",
+        framework_doc_path=parsed["frameworkDocPath"] if isinstance(parsed.get("frameworkDocPath"), str) else "",
     )
 
 
@@ -680,6 +778,14 @@ def _state_to_dict(state: RunState) -> dict[str, Any]:
     data["featureDocPath"] = state.feature_doc_path
     data["model"] = state.model
     data["phase"] = state.phase
+    data["mode"] = state.mode
+    if state.game:
+        data["game"] = state.game
+    data["frameworkEnabled"] = state.framework_enabled
+    if state.framework_plan_path:
+        data["frameworkPlanPath"] = state.framework_plan_path
+    if state.framework_doc_path:
+        data["frameworkDocPath"] = state.framework_doc_path
     if state.current_task_id:
         data["currentTaskId"] = state.current_task_id
     if state.last_run_id:

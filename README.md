@@ -1,6 +1,6 @@
 # Bulings AI WorkFlow
 
-个人 Unity 开发工作流。当前版本是工作模式：读策划案和预制体，整理成可逐项完成的任务，再写代码。开发说明和完成后的功能说明都可以单独开关、单独指定路径。独游模式只保留入口，调用时会停止。
+个人 Unity 开发工作流。工作模式：读策划案和预制体，整理成可逐项完成的任务，再写代码。独游模式面向小规模游戏：第一次先立框架，再按纵向切片做功能，每个切片都要挂在框架的扩展点上。开发说明和完成后的功能说明都可以单独开关、单独指定路径。
 
 两条入口用同一份 Skill。装进 Unity 工程后，可以在 Cursor 对话里做，也可以用命令行在本机拉起 Agent。
 
@@ -49,7 +49,7 @@ bulings init --project <Unity工程>
 ## 命令行
 
 ```powershell
-bulings run --project <Unity工程> --design <策划案> --prefab <预制体> [--prefab <预制体> ...] [--name <功能名>] [--dev-spec <路径>] [--feature-doc <路径>] [--no-dev-spec] [--no-feature-doc] [--model <模型>]
+bulings run --project <Unity工程> --design <策划案> --prefab <预制体> [--prefab <预制体> ...] [--name <功能名>] [--dev-spec <路径>] [--feature-doc <路径>] [--no-dev-spec] [--no-feature-doc] [--no-framework] [--model <模型>]
 ```
 
 Agent 在本机运行，工作目录是 Unity 工程。模型默认是 `composer-2.5`，可以用 `--model` 或 `workflow.yaml` 的 `model` 覆盖。`{feature}` 来自 `--name`，否则用策划案文件名。
@@ -58,6 +58,7 @@ Agent 在本机运行，工作目录是 Unity 工程。模型默认是 `composer
 - 开发说明默认是 `Docs/AI/DevSpecs/<功能名>.md`。
 - 任务全部完成后，功能说明默认是 `Docs/AI/Features/<功能名>.md`。
 - 每一轮只交给 Agent 一项任务。这项结束后如果还不是 `done`，命令就停下来。
+- `mode: work` 时至少要给一个 `--prefab`；`mode: indie` 时可以不给。
 
 同一功能还有未完成的运行时，`run` 不会再开一个 Agent。接着做：
 
@@ -65,7 +66,29 @@ Agent 在本机运行，工作目录是 Unity 工程。模型默认是 `composer
 bulings resume --project <Unity工程> --run <功能名>
 ```
 
-不依赖阻塞项的任务会先做。轮到阻塞项时停下。`resume` 会把当前这项改回 `in_progress` 再做，原来的阻塞原因会带进提示。中断留下的 `in_progress` 会重做那一项。
+不依赖阻塞项的任务会先做。轮到阻塞项时停下。`resume` 会把当前这项改回 `in_progress` 再做，原来的阻塞原因会带进提示。中断留下的 `in_progress` 会重做那一项。`resume` 用运行建立时的模式，`workflow.yaml` 的 `mode` 被改过会先报错。
+
+## 独游模式
+
+`workflow.yaml` 写 `mode: indie` 就用独游流程，命令还是 `run` / `resume`。它比工作模式多一道**框架阶段**，少一些公司流程的硬要求：
+
+1. **建立框架**：工程里还没有可用的 `.bulings/indie/framework.json` 时，先落一套能承接新玩法的骨架（启动与生命周期、服务、事件、状态、配置、存档），写框架清单和框架文档。这一阶段不写玩法功能。
+2. **拆切片**：按纵向切片拆功能，一项任务 = 一条能自己验收完的能力。每项必须写 `framework`，取值来自框架的系统 id 或扩展点名；框架里还没有的写 `new: <说明>`。
+3. **实现切片**：一轮一项。优先复用已有扩展点，确实需要新的就往框架清单里追加登记。
+4. **功能说明**：写清挂载了哪些框架点、新增了哪些扩展点、下一个功能从哪接。
+
+```powershell
+bulings run --project <Unity工程> --design <策划案> [--name <功能名>]
+```
+
+- 框架清单 `.bulings/indie/framework.json`（工程级，Agent 写、工作流校验）；框架文档默认 `Docs/AI/Frameworks/<工程目录名>.md`。
+- 框架没写好（不存在、不合法，或 `status` 仍是 `draft`）时命令退出 2，不进入功能代码。
+- 已经有可用框架时直接进分析和实现，只对登记过但磁盘上找不到的路径打警告。
+- `--no-framework` 或 `indie.framework.enabled: false` 跳过框架阶段，切片仍然要写 `new:` 登记扩展点。
+- 切片引用了框架里不存在的挂载点时，在写代码前就停下，并列出可用挂载点。
+- 独游模式下 `bulings split` 会拒绝执行；`bulings kb` 可以照常用。
+
+框架选型、最小基线、反模式和产物格式见 [docs/独游模式说明.md](docs/独游模式说明.md)，装进工程的规则在 `.cursor/skills/indie-feature/`。
 
 ## 接入 Unity MCP
 
@@ -120,6 +143,12 @@ knowledge:
   root: Docs/AI/Knowledge
 clientSplit:
   path: Docs/AI/ClientSpecs/{feature}.md
+indie:
+  framework:            # 仅 mode: indie 时使用
+    enabled: true
+    plan: .bulings/indie/framework.json
+    doc: Docs/AI/Frameworks/{game}.md   # {game} 取工程目录名
+    paradigm: ""       # 留空由 Agent 按 frameworks.md 选型
 docs:
   devSpec:
     enabled: true
@@ -140,14 +169,14 @@ project:
   protectedPaths: []    # 这些路径不允许改
 ```
 
-`mode: indie` 时，命令行会在创建或恢复 Agent 之前停止。
+`mode: work` 是默认值，行为和之前一样。`mode: indie` 时 `run` / `resume` 走独游流程（先立框架，再按切片做功能），详见上文和 [独游模式说明](docs/独游模式说明.md)。
 
 ## 退出码
 
 - `0`：完成
-- `1`：没有启动（参数、配置、密钥、独游模式，或启动 Agent 失败）
-- `2`：已经启动但没有做完（这一轮失败或被取消、任务阻塞，或没有合法的 `tasks.json`）
+- `1`：没有启动（参数、配置、密钥，或启动 Agent 失败）
+- `2`：已经启动但没有做完（这一轮失败或被取消、任务阻塞，或 `tasks.json` / `framework.json` 不合法）
 
 ## 本版本不做的事
 
-不实现独游模式的开发流程，不调用 Unity 批处理编译（编辑器内的 MCP 刷新不受此限），也不自动创建 git commit。
+不调用 Unity 批处理编译（编辑器内的 MCP 刷新不受此限），也不自动创建 git commit。

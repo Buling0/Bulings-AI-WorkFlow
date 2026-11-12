@@ -31,6 +31,15 @@ knowledge:
 clientSplit:
   path: Docs/AI/ClientSpecs/{feature}.md
 
+# 独游模式（mode: indie）：第一次 run 先建立框架基线，再按纵向切片做功能。
+# enabled: false 或命令行 --no-framework 时跳过框架阶段，直接按功能实现。
+indie:
+  framework:
+    enabled: true
+    plan: .bulings/indie/framework.json
+    doc: Docs/AI/Frameworks/{game}.md
+    paradigm: ""
+
 project:
   codeRoots: []
   namespaces: []

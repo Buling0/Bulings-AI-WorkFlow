@@ -23,6 +23,15 @@ class PromptContext:
     client_spec_path: str = ""
     knowledge_root: str = ""
     knowledge_map: str = ""
+    mode: str = "work"
+    game: str = ""
+    framework_enabled: bool = False
+    framework_plan_path: str = ""
+    framework_doc_path: str = ""
+    framework_summary: str = ""
+    framework_hooks: str = ""
+    framework_paradigm: str = ""
+    project_root: str = ""
 
 
 @dataclass
@@ -34,10 +43,10 @@ class SplitContext:
     protected_paths: list[str]
 
 
-def format_project_constraints(project: ProjectProfile, knowledge_map: str = "") -> str:
+def format_project_constraints(project: ProjectProfile, knowledge_map: str = "", skill_name: str = "work-feature") -> str:
     lines: list[str] = []
     if knowledge_map:
-        lines.append(f"知识库地图：{knowledge_map}（分析前先读，按 work-feature 的「知识库」一节使用）")
+        lines.append(f"知识库地图：{knowledge_map}（分析前先读，按 {skill_name} 的「知识库」一节使用）")
     if project.code_roots:
         lines.append(f"代码目录：{'、'.join(project.code_roots)}")
     if project.namespaces:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -21,6 +21,9 @@ class FeatureTask:
     acceptance: list[str]
     status: TaskStatus
     blocked_reason: str | None = None
+    # 独游模式用：纵向切片名，以及这条切片挂在哪些框架扩展点上。工作模式不写这两项。
+    slice: str | None = None
+    framework: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -147,6 +150,8 @@ def _replace_status(task: FeatureTask, status: TaskStatus) -> FeatureTask:
         acceptance=list(task.acceptance),
         status=status,
         blocked_reason=task.blocked_reason,
+        slice=task.slice,
+        framework=list(task.framework),
     )
 
 
@@ -163,6 +168,10 @@ def _task_to_dict(task: FeatureTask) -> dict[str, Any]:
     }
     if task.blocked_reason:
         data["blockedReason"] = task.blocked_reason
+    if task.slice:
+        data["slice"] = task.slice
+    if task.framework:
+        data["framework"] = list(task.framework)
     return data
 
 
@@ -186,6 +195,11 @@ def _parse_task(value: object) -> FeatureTask | None:
     blocked_reason = root.get("blockedReason")
     if blocked_reason is not None and not isinstance(blocked_reason, str):
         return None
+    slice_name = root.get("slice")
+    if slice_name is not None and not (isinstance(slice_name, str) and slice_name.strip() != ""):
+        return None
+    if not _is_optional_string_array(root.get("framework")):
+        return None
 
     task = FeatureTask(
         id=root["id"],
@@ -196,6 +210,8 @@ def _parse_task(value: object) -> FeatureTask | None:
         prefab_nodes=_as_string_list(root.get("prefabNodes")),
         acceptance=_as_string_list(root.get("acceptance")),
         status=status,  # type: ignore[arg-type]
+        slice=slice_name if isinstance(slice_name, str) else None,
+        framework=_as_string_list(root.get("framework")),
     )
     if isinstance(blocked_reason, str) and blocked_reason.strip() != "":
         task.blocked_reason = blocked_reason

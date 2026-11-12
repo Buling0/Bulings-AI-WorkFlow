@@ -1,4 +1,16 @@
-from bulings.tasks import FeatureTask, parse_task_file, reopen_blocked_task, select_next_task
+import json
+import tempfile
+from pathlib import Path
+
+from bulings.tasks import (
+    FeatureTask,
+    mark_task_in_progress,
+    parse_task_file,
+    read_task_file,
+    reopen_blocked_task,
+    select_next_task,
+    write_task_file,
+)
 
 
 def _task(task_id: str, status: str, depends_on: list[str] | None = None, blocked_reason: str | None = None) -> FeatureTask:
@@ -146,3 +158,54 @@ def test_resume_reopens_only_the_current_blocked_task() -> None:
     assert statuses == {"T1": "in_progress", "T2": "blocked", "T3": "done"}
     assert updated.tasks[0].blocked_reason == "缺按钮"
     assert reopen_blocked_task(parsed, "T3") is None
+
+
+def test_indie_fields_are_optional_and_round_trip() -> None:
+    legacy = parse_task_file(_file([_raw("T1", "pending")]))
+    assert legacy is not None
+    assert legacy.tasks[0].slice is None
+    assert legacy.tasks[0].framework == []
+
+    sliced = _raw("T1", "pending")
+    sliced["slice"] = "放置炮塔"
+    sliced["framework"] = ["EventBus", "new: 格子坐标服务"]
+    parsed = parse_task_file(_file([sliced]))
+    assert parsed is not None
+    assert parsed.tasks[0].slice == "放置炮塔"
+    assert parsed.tasks[0].framework == ["EventBus", "new: 格子坐标服务"]
+
+    with tempfile.TemporaryDirectory(prefix="bulings-tasks-") as directory:
+        target = Path(directory) / "tasks.json"
+        write_task_file(target, parsed)
+        payload = json.loads(target.read_text(encoding="utf-8"))
+        assert payload["tasks"][0]["slice"] == "放置炮塔"
+        assert payload["tasks"][0]["framework"] == ["EventBus", "new: 格子坐标服务"]
+        assert read_task_file(target) is not None
+
+        legacy_target = Path(directory) / "legacy.json"
+        write_task_file(legacy_target, legacy)
+        legacy_payload = json.loads(legacy_target.read_text(encoding="utf-8"))
+        assert "slice" not in legacy_payload["tasks"][0]
+        assert "framework" not in legacy_payload["tasks"][0]
+
+
+def test_marks_slice_and_framework_through_status_changes() -> None:
+    sliced = _raw("T1", "pending")
+    sliced["slice"] = "放置炮塔"
+    sliced["framework"] = ["EventBus"]
+    parsed = parse_task_file(_file([sliced]))
+    assert parsed is not None
+    started = mark_task_in_progress(parsed, "T1")
+    assert started.tasks[0].status == "in_progress"
+    assert started.tasks[0].slice == "放置炮塔"
+    assert started.tasks[0].framework == ["EventBus"]
+
+
+def test_rejects_broken_indie_task_fields() -> None:
+    for bad in ("", "   "):
+        sliced = _raw("T1", "pending")
+        sliced["slice"] = bad
+        assert parse_task_file(_file([sliced])) is None
+    broken = _raw("T1", "pending")
+    broken["framework"] = "EventBus"
+    assert parse_task_file(_file([broken])) is None

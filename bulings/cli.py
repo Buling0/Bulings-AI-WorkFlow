@@ -11,18 +11,22 @@ from bulings.install import install_workflow, is_unity_project
 
 HELP_TEXT = """用法
   bulings init --project <Unity工程>
-  bulings run --project <Unity工程> --design <策划案> --prefab <预制体> [--prefab <预制体> ...] [--name <功能名>] [--dev-spec <路径>] [--feature-doc <路径>] [--no-dev-spec] [--no-feature-doc] [--model <模型>]
+  bulings run --project <Unity工程> --design <策划案> [--prefab <预制体> ...] [--name <功能名>] [--dev-spec <路径>] [--feature-doc <路径>] [--no-dev-spec] [--no-feature-doc] [--no-framework] [--model <模型>]
   bulings split --project <Unity工程> --design <策划案> [--name <功能名>] [--output <路径>] [--model <模型>]
   bulings kb --project <Unity工程> --action <init|update|check> [--name <功能名>] [--model <模型>]
   bulings resume --project <Unity工程> --run <slug>
+
+模式
+  workflow.yaml 的 mode: work 时按任务清单做功能，至少要给一个 --prefab。
+  mode: indie 时第一次 run 先建框架（.bulings/indie/framework.json），再按切片做功能，可以不给 --prefab。
 
 环境变量
   CURSOR_API_KEY   Cursor 用户 API key
 
 退出码
   0  完成
-  1  未能启动（参数、配置、密钥、独游模式或 CursorAgentError）
-  2  已开始但没有完成（Agent 失败、任务阻塞或 tasks.json 不合法）"""
+  1  未能启动（参数、配置、密钥或 CursorAgentError）
+  2  已开始但没有完成（Agent 失败、任务阻塞，或 tasks.json / framework.json 不合法）"""
 
 
 class BulingsUsageError(Exception):
@@ -48,6 +52,7 @@ class ParsedArgs:
     feature_doc: str | None = None
     no_dev_spec: bool = False
     no_feature_doc: bool = False
+    no_framework: bool = False
     model: str | None = None
     run: str | None = None
     output: str | None = None
@@ -129,9 +134,6 @@ def run_command(args: ParsedArgs, project: str) -> int:
     if not args.design:
         print("缺少 --design <策划案>", file=sys.stderr)
         return 1
-    if not args.prefabs:
-        print("至少提供一个 --prefab <预制体>", file=sys.stderr)
-        return 1
     from bulings.runner import RunCommand, run_workflow
 
     return run_workflow(
@@ -146,6 +148,7 @@ def run_command(args: ParsedArgs, project: str) -> int:
                 feature_doc_path=args.feature_doc,
                 no_dev_spec=args.no_dev_spec,
                 no_feature_doc=args.no_feature_doc,
+                no_framework=args.no_framework,
             ),
         )
     )
@@ -195,6 +198,7 @@ def parse_args(argv: list[str]) -> ParsedArgs:
         feature_doc=namespace.feature_doc,
         no_dev_spec=namespace.no_dev_spec,
         no_feature_doc=namespace.no_feature_doc,
+        no_framework=namespace.no_framework,
         model=namespace.model,
         run=namespace.run_slug,
         output=namespace.output,
@@ -222,6 +226,7 @@ def _build_parser() -> BulingsParser:
     parser.add_argument("--run", dest="run_slug")
     parser.add_argument("--no-dev-spec", action="store_true")
     parser.add_argument("--no-feature-doc", action="store_true")
+    parser.add_argument("--no-framework", action="store_true")
     parser.add_argument("--prefab", action="append", nargs="+", default=None)
     return parser
 

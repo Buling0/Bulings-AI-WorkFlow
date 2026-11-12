@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ DEFAULT_CLIENT_SPEC = "Docs/AI/ClientSpecs/{feature}.md"
 DEFAULT_KNOWLEDGE_ROOT = "Docs/AI/Knowledge"
 DEFAULT_MCP_SERVER = "unity"
 DEFAULT_MCP_URL = "http://localhost:8080/mcp"
+DEFAULT_FRAMEWORK_PLAN = ".bulings/indie/framework.json"
+DEFAULT_FRAMEWORK_DOC = "Docs/AI/Frameworks/{game}.md"
 _UNSAFE_FEATURE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _LEADING_DOTS = re.compile(r"^\.+")
 
@@ -66,6 +69,16 @@ class KnowledgeConfig:
 
 
 @dataclass
+class FrameworkConfig:
+    """独游模式的框架基线设置。"""
+
+    enabled: bool = True
+    plan: str = DEFAULT_FRAMEWORK_PLAN
+    doc: str = DEFAULT_FRAMEWORK_DOC
+    paradigm: str = ""
+
+
+@dataclass
 class WorkflowConfig:
     mode: WorkflowMode
     model: str
@@ -74,6 +87,7 @@ class WorkflowConfig:
     unity_mcp: UnityMcpConfig = field(default_factory=UnityMcpConfig)
     client_spec_path: str = DEFAULT_CLIENT_SPEC
     knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
+    framework: FrameworkConfig = field(default_factory=FrameworkConfig)
 
 
 @dataclass
@@ -83,6 +97,7 @@ class RunOverrides:
     feature_doc_path: str | None = None
     no_dev_spec: bool = False
     no_feature_doc: bool = False
+    no_framework: bool = False
 
 
 @dataclass
@@ -93,6 +108,10 @@ class ResolvedRunConfig:
     feature_doc_enabled: bool
     dev_spec_path: str
     feature_doc_path: str
+    game: str = "feature"
+    framework_enabled: bool = False
+    framework_plan_path: str = ""
+    framework_doc_path: str = ""
 
 
 def workflow_file(project_root: str | os.PathLike[str]) -> Path:
@@ -111,6 +130,12 @@ def feature_token(feature: str) -> str:
     return safe or "feature"
 
 
+def game_token(project_root: str | os.PathLike[str]) -> str:
+    """从工程目录名得到框架文档要用的游戏标识。"""
+    name = os.path.basename(os.path.abspath(project_root))
+    return feature_token(name)
+
+
 def merge_config(raw: object) -> WorkflowConfig:
     root = _as_object(raw) or {}
     mode_raw = root.get("mode")
@@ -126,6 +151,8 @@ def merge_config(raw: object) -> WorkflowConfig:
     knowledge = _as_object(root.get("knowledge")) or {}
     client_split = _as_object(root.get("clientSplit")) or {}
     ui = _as_object(project.get("ui")) or {}
+    indie = _as_object(root.get("indie")) or {}
+    framework = _as_object(indie.get("framework")) or {}
 
     return WorkflowConfig(
         unity_mcp=UnityMcpConfig(
@@ -138,6 +165,12 @@ def merge_config(raw: object) -> WorkflowConfig:
         knowledge=KnowledgeConfig(
             enabled=_as_boolean(knowledge.get("enabled"), True),
             root=_non_empty_string(knowledge.get("root"), DEFAULT_KNOWLEDGE_ROOT),
+        ),
+        framework=FrameworkConfig(
+            enabled=_as_boolean(framework.get("enabled"), True),
+            plan=_non_empty_string(framework.get("plan"), DEFAULT_FRAMEWORK_PLAN),
+            doc=_non_empty_string(framework.get("doc"), DEFAULT_FRAMEWORK_DOC),
+            paradigm=_as_string(framework.get("paradigm")),
         ),
         client_spec_path=_non_empty_string(client_split.get("path"), DEFAULT_CLIENT_SPEC),
         mode="indie" if mode_raw == "indie" else "work",
@@ -189,6 +222,7 @@ def resolve_run_config(
     overrides: RunOverrides,
 ) -> ResolvedRunConfig:
     token = feature_token(feature)
+    game = game_token(project_root)
     override_model = overrides.model.strip() if overrides.model and overrides.model.strip() else ""
     dev_spec_pattern = config.docs.dev_spec.path if overrides.dev_spec_path is None else overrides.dev_spec_path
     feature_doc_pattern = (
@@ -201,6 +235,10 @@ def resolve_run_config(
         feature_doc_enabled=False if overrides.no_feature_doc else config.docs.feature_doc.enabled,
         dev_spec_path=resolve_doc_path(dev_spec_pattern, token, project_root),
         feature_doc_path=resolve_doc_path(feature_doc_pattern, token, project_root),
+        game=game,
+        framework_enabled=config.framework.enabled and not overrides.no_framework,
+        framework_plan_path=resolve_template(config.framework.plan, {"feature": token, "game": game}, project_root),
+        framework_doc_path=resolve_template(config.framework.doc, {"feature": token, "game": game}, project_root),
     )
 
 
@@ -216,7 +254,14 @@ def knowledge_map_path(config: WorkflowConfig, project_root: str | os.PathLike[s
 
 
 def resolve_doc_path(pattern: str, feature: str, project_root: str | os.PathLike[str]) -> str:
-    replaced = pattern.replace("{feature}", feature)
+    return resolve_template(pattern, {"feature": feature}, project_root)
+
+
+def resolve_template(pattern: str, tokens: Mapping[str, str], project_root: str | os.PathLike[str]) -> str:
+    """按 ``{game}`` / ``{feature}`` 之类的占位符展开路径，相对路径按工程根解析。"""
+    replaced = pattern
+    for key, value in tokens.items():
+        replaced = replaced.replace("{" + key + "}", value)
     if os.path.isabs(replaced):
         return os.path.normpath(replaced)
     return os.path.normpath(os.path.join(os.path.abspath(project_root), replaced))
