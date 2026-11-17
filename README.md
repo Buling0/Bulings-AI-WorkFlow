@@ -42,9 +42,29 @@ bulings init --project <Unity工程>
 
 ## 在 Cursor 里用
 
-用 Cursor 打开这个 Unity 工程，直接给出策划案和预制体路径。工作模式会先分析，再一次做一项任务，全部完成后再写功能说明。
+用 Cursor 打开这个 Unity 工程（先跑过一次 `bulings init`，`.cursor/skills/` 里有 Skill）。对话里输入 `/BulingAI`（同一条也在 `/buling-ai`）。一条消息里两种写法都可以，也可以混用：
 
-提示里如果点了阶段或任务编号，就只做那一段。例如只写开发说明，或只重做 `T3`。
+```text
+/BulingAI
+--design <策划案路径> --prefab <预制体路径> --name <功能名>
+
+/BulingAI
+<把策划案正文贴在这里>
+<把预制体路径、@预制体，或预制体 YAML 贴在这里>
+```
+
+`--prefab` 可以写多次。只贴正文、没有策划案文件时，会把正文写到工程的 `docs/AI/Designs/<功能名>.md`（已有 `Docs/AI` 时跟那个目录）。当前对话自己做，不另起命令行 Agent。
+
+两条线也都能在对话里直接说：
+
+- **工作模式**：给出策划案和预制体路径。先分析，再一次做一项任务，全部完成后写功能说明。
+- **独游模式**：先给一句话玩法灵感，让 Agent 按 `indie-design` 一轮轮出选项、写策划案；定稿后再按 `indie-feature` 先立框架、再按切片做功能。
+
+提示里如果点了阶段或任务编号，就只做那一段。例如只写开发说明、只重做 `T3`，或只推进「剧情」这一轮。
+
+对话和命令行的确定性校验不一样：命令行会拒掉没推进的轮次、不存在的选项 id；对话里靠 Skill 自带的自检清单。两边写的是同一份文件，交替使用不会被推翻——下一次 `bulings design` 会按同一套规则检查已经写下的 `design.json`。
+
+Cursor 没自动读到 Skill 时，直接把路径给它，例如 `.cursor/skills/indie-design/SKILL.md`、`.cursor/skills/indie-feature/SKILL.md`。升级本仓库后要重新 `bulings init`，否则工程里还是旧 Skill。
 
 ## 命令行
 

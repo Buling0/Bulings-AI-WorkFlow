@@ -134,6 +134,7 @@ def init_command(project: str) -> int:
         return 1
     result = install_workflow(project)
     print(f"已安装 Skill 到 {os.path.join(project, '.cursor', 'skills')}")
+    print(f"已安装快捷指令到 {os.path.join(project, '.cursor', 'commands')}（对话里输入 /BulingAI）")
     if result.mcp_written:
         print(f"已写入 Unity MCP 配置 {os.path.join(project, '.cursor', 'mcp.json')}（需要在 Unity 里启动对应的 MCP 服务）")
     config_path = os.path.join(project, ".bulings", "workflow.yaml")

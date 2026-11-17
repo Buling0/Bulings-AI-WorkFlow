@@ -45,6 +45,12 @@ def test_init_overwrites_skills_and_keeps_existing_workflow() -> None:
         installed_skill = skill_path.read_text(encoding="utf-8")
         assert installed_skill != "stale\n"
         assert "策划案" in installed_skill
+        command_path = project / ".cursor" / "commands" / "BulingAI.md"
+        entry_skill = project / ".cursor" / "skills" / "buling-ai" / "SKILL.md"
+        assert command_path.is_file()
+        assert "buling-ai/SKILL.md" in command_path.read_text(encoding="utf-8")
+        assert entry_skill.is_file()
+        assert "disable-model-invocation: true" in entry_skill.read_text(encoding="utf-8")
 
 
 def test_init_rejects_a_directory_that_is_not_a_unity_project() -> None:

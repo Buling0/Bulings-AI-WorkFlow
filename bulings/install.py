@@ -48,6 +48,8 @@ def install_workflow(project_root: str | os.PathLike[str]) -> InstallResult:
             destination.unlink()
         shutil.copytree(entry, destination)
 
+    install_commands(root)
+
     config_dest = workflow_file(root)
     config_written = False
     if not config_dest.exists():
@@ -57,6 +59,19 @@ def install_workflow(project_root: str | os.PathLike[str]) -> InstallResult:
 
     mcp_written = install_unity_mcp(root, load_workflow_config(root).unity_mcp)
     return InstallResult(config_written=config_written, mcp_written=mcp_written)
+
+
+def install_commands(root: Path) -> None:
+    """把快捷指令复制到 <工程>/.cursor/commands/，重复执行时覆盖同名文件。"""
+    source = package_root() / "pack" / "commands"
+    if not source.is_dir():
+        return
+    destination_root = root / ".cursor" / "commands"
+    destination_root.mkdir(parents=True, exist_ok=True)
+    for entry in source.iterdir():
+        if not entry.is_file() or entry.suffix.lower() != ".md":
+            continue
+        shutil.copyfile(entry, destination_root / entry.name)
 
 
 def mcp_server_entry(mcp: UnityMcpConfig) -> dict[str, object] | None:
