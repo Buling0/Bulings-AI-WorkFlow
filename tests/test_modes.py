@@ -136,6 +136,15 @@ def test_framework_prompt_carries_the_draft_and_drift(tmp_path: Path) -> None:
     assert "磁盘上已经找不到" in prompt
 
 
+def test_work_analyze_prompt_asks_for_the_gap_analysis(tmp_path: Path) -> None:
+    prompt = analyze_prompt(_context(tmp_path, mode="work", prefab_paths=["Assets/P.prefab"]))
+    assert "缺失分析" in prompt
+    assert "策划" in prompt and "后端" in prompt and "美术" in prompt and "前端" in prompt
+    assert "blockedReason 以类别开头" in prompt
+    assert "停下等补齐" in prompt
+    assert "非阻断项不打断流程" in prompt
+
+
 def test_analyze_prompt_lists_hooks_and_new_rule(tmp_path: Path) -> None:
     _write_plan(tmp_path)
     prompt = indie_analyze_prompt(_context(tmp_path))
@@ -144,6 +153,8 @@ def test_analyze_prompt_lists_hooks_and_new_rule(tmp_path: Path) -> None:
     assert "bootstrap" in prompt and "EventBus" in prompt
     assert "new: <一句话说明>" in prompt
     assert "纵向切片" in prompt
+    assert "缺失分析" in prompt
+    assert "停下等补齐" in prompt
 
 
 def test_analyze_prompt_without_framework_still_asks_for_hooks(tmp_path: Path) -> None:
@@ -213,3 +224,23 @@ def test_validate_without_framework_only_needs_a_hook(tmp_path: Path) -> None:
     assert validate_indie_tasks(_task_file(_task(framework=["任意自定义"])), context) == []
     errors = validate_indie_tasks(_task_file(_task(framework=[])), context)
     assert errors and "没有写 framework 挂载点" in errors[0]
+
+
+def test_indie_prompts_mention_unity_mcp_only_when_configured(tmp_path: Path) -> None:
+    _write_plan(tmp_path)
+    off = _context(tmp_path)
+    assert "Unity MCP" not in indie_analyze_prompt(off)
+    assert "Unity MCP" not in indie_implement_prompt(off, _task(), False)
+
+    on = _context(tmp_path, unity_mcp_server="unity")
+    analyze = indie_analyze_prompt(on)
+    assert "Unity MCP（服务 unity）可用" in analyze
+    assert "分析阶段不要修改场景或资源" in analyze
+
+    implement = indie_implement_prompt(on, _task(), False)
+    assert "Unity MCP（服务 unity）可用" in implement
+    assert "unity-mcp.md" in implement
+    assert "刷新编译" in implement
+
+    framework = framework_prompt(on, "", [])
+    assert "Unity MCP（服务 unity）可用" in framework

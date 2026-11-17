@@ -95,8 +95,15 @@ def analyze_prompt(context: PromptContext) -> str:
             _protected_line(context.protected_paths),
             "不要创建 git commit。不要修改 .meta 的 guid。不要启动 Unity 批处理编译。",
             *_mcp_lines(context, "analyze"),
+            "先按 Skill 的「缺失分析」一节找这次缺什么，分四类：策划（策划案和配置补充）、后端（协议号和协议缺的数据）、"
+            "美术（预制体和需求不符、缺 UI 或预制体）、前端（显示逻辑不清晰）。",
+            "缺了就没法按策划实现、或实现出来一定和策划不一致的，算阻断：对应任务 status 写 blocked，"
+            "blockedReason 以类别开头，写清缺什么、要谁补。可以先用保守做法落地的算非阻断：任务照常 pending，"
+            "记进开发说明的「缺失与待补齐」。拿不准的按阻断处理。",
+            "只要有阻断项，就在分析结束时按四类向用户汇报并停下等补齐，不要继续实现，也不要用占位实现冒充完成。"
+            "非阻断项不打断流程，等功能说明写完或在最后回复里汇总一次。",
             "tasks.json 的 status 只能是 pending、in_progress、done、blocked。至少一项任务。id 不要重复。",
-            "策划和预制体不一致时，该项 status 为 blocked，并写 blockedReason。",
+            "策划、预制体或协议对不上时，不要脑补：该项 status 为 blocked，并写 blockedReason。",
         ]
     )
 
@@ -124,6 +131,8 @@ def implement_prompt(context: PromptContext, task: FeatureTask, retry: bool) -> 
         dev_spec,
         _protected_line(context.protected_paths),
         "做完把该任务标成 done。无法在不脑补的前提下完成时标成 blocked，并写 blockedReason。",
+        "实现中才发现缺东西时：阻断项（缺规则、协议、预制体节点、显示逻辑）标 blocked，blockedReason 以类别开头"
+        "（策划 / 后端 / 美术 / 前端）写清缺什么，然后停下；非阻断项先用保守做法做完，记进开发说明的「缺失与待补齐」。",
         "不要创建 git commit。不要修改 .meta 的 guid。",
     ]
     return "\n".join(line for line in lines if line != "")
@@ -140,6 +149,8 @@ def document_prompt(context: PromptContext) -> str:
             f"功能说明写入：{context.feature_doc_path}",
             "按 .cursor/skills/work-feature/feature-doc-template.md，依据实际改过的代码来写。",
             "写清：功能做什么、入口、主要类型、数据流、依赖的项目模块、修改时要动哪些文件、已知限制、和策划不一致的地方。",
+            "「未补齐的非阻断项」按策划 / 后端 / 美术 / 前端四类汇总：缺什么、现在用什么代替、什么时候要补；没有就写「无」。",
+            "写完在最后回复里把这份非阻断清单再说一遍，别再改玩法代码。",
             *_knowledge_update_lines(context),
         ]
     )

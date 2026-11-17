@@ -90,3 +90,46 @@ def test_init_skips_mcp_when_disabled() -> None:
         (project / ".bulings" / "workflow.yaml").write_text("unity:\n  mcp:\n    enabled: false\n", encoding="utf-8")
         assert install_workflow(project).mcp_written is False
         assert not (project / ".cursor" / "mcp.json").exists()
+
+
+def test_mcp_entry_prefers_stdio_command_over_url() -> None:
+    from bulings.config import UnityMcpConfig
+    from bulings.install import mcp_server_entry
+
+    stdio = mcp_server_entry(UnityMcpConfig(command="uvx unity-mcp", args=["--port", "8080"], url="http://ignored"))
+    assert stdio == {"command": "uvx unity-mcp", "args": ["--port", "8080"]}
+    assert mcp_server_entry(UnityMcpConfig(command="", url="http://x/mcp")) == {"url": "http://x/mcp"}
+    assert mcp_server_entry(UnityMcpConfig(command="  ", url="   ")) is None
+
+
+def test_init_writes_stdio_entry_from_config_and_custom_server_name() -> None:
+    import json
+
+    with tempfile.TemporaryDirectory(prefix="bulings-mcp-stdio-") as directory:
+        project = Path(directory)
+        _unity_project(project)
+        (project / ".bulings").mkdir()
+        (project / ".bulings" / "workflow.yaml").write_text(
+            "unity:\n"
+            "  mcp:\n"
+            "    enabled: true\n"
+            "    server: unity_editor\n"
+            "    command: uvx\n"
+            "    args: [unity-mcp, --port, '8080']\n",
+            encoding="utf-8",
+        )
+        assert install_workflow(project).mcp_written is True
+        servers = json.loads((project / ".cursor" / "mcp.json").read_text(encoding="utf-8"))["mcpServers"]
+        assert servers["unity_editor"] == {"command": "uvx", "args": ["unity-mcp", "--port", "8080"]}
+
+
+def test_init_leaves_a_broken_mcp_json_alone() -> None:
+    with tempfile.TemporaryDirectory(prefix="bulings-mcp-broken-") as directory:
+        project = Path(directory)
+        _unity_project(project)
+        mcp_path = project / ".cursor" / "mcp.json"
+        mcp_path.parent.mkdir()
+        mcp_path.write_text("{ not json", encoding="utf-8")
+
+        assert install_workflow(project).mcp_written is False
+        assert mcp_path.read_text(encoding="utf-8") == "{ not json"

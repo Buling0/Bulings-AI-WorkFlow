@@ -138,6 +138,8 @@ def indie_analyze_prompt(context: PromptContext) -> str:
         "",
         *_framework_lines(context),
         "",
+        *_mcp_read_only_lines(context),
+        "",
         "项目约束：",
         context.constraints,
         "",
@@ -158,8 +160,15 @@ def indie_analyze_prompt(context: PromptContext) -> str:
         "同一能力的任务用同一个 slice 名；dependsOn 写真实前置。",
         _protected_line(context.protected_paths),
         "不要创建 git commit。不要修改 .meta 的 guid。不要启动 Unity 批处理编译。",
+        "拆切片的第一步是 Skill 里的「缺失分析」：分四类找缺什么——策划（策划案和配置补充）、后端（数据字段和协议号）、"
+        "美术（预制体、场景、素材和需求不符或缺失）、前端（显示逻辑不清晰）。",
+        "缺了就没法按策划实现、或实现出来一定和策划不一致的，算阻断：对应任务 status 写 blocked，"
+        "blockedReason 以类别开头，写清缺什么、要谁补。可以先用保守做法落地的算非阻断：任务照常 pending，"
+        "记进开发说明的「缺失与待补齐」。拿不准的按阻断处理。",
+        "只要有阻断项，就在分析结束时按四类向开发者汇报并停下等补齐，不要继续实现，也不要用占位实现冒充完成。"
+        "非阻断项不打断流程，等所有切片做完再汇总一次。",
         "tasks.json 的 status 只能是 pending、in_progress、done、blocked；至少一项任务；id 不要重复。",
-        "策划和工程对不上时，该项 status 为 blocked，并写 blockedReason。",
+        "策划、工程或数据对不上时，不要脑补：该项 status 为 blocked，并写 blockedReason。",
     ]
     return "\n".join(line for line in lines if line != "")
 
@@ -200,7 +209,10 @@ def indie_implement_prompt(context: PromptContext, task: FeatureTask, retry: boo
         )
     lines += [
         _protected_line(context.protected_paths),
+        *_mcp_lines(context),
         "做完把该任务标成 done。无法在不脑补的前提下完成时标成 blocked，并写 blockedReason。",
+        "实现中才发现缺东西时：阻断项（缺规则、数据字段、资源节点、显示逻辑）标 blocked，blockedReason 以类别开头"
+        "（策划 / 后端 / 美术 / 前端）写清缺什么，然后停下；非阻断项先用保守做法做完，记进开发说明的「缺失与待补齐」。",
         "不要创建 git commit。不要修改 .meta 的 guid。",
     ]
     return "\n".join(line for line in lines if line != "")
@@ -217,6 +229,8 @@ def indie_document_prompt(context: PromptContext) -> str:
         f"功能说明写入：{context.feature_doc_path}",
         "写清：功能做什么、入口、主要类型、数据流、挂载的框架点、新增的扩展点、"
         "如何在这个框架上继续扩展、已知限制、和策划不一致的地方。",
+        "「未补齐的非阻断项」按策划 / 后端 / 美术 / 前端四类汇总：缺什么、现在用什么代替、什么时候要补；没有就写「无」。",
+        "写完在最后回复里把这份非阻断清单再说一遍，别再改玩法代码。",
     ]
     if context.framework_enabled and context.framework_plan_path:
         lines.append(
@@ -294,8 +308,18 @@ def _mcp_lines(context: PromptContext) -> list[str]:
     if not context.unity_mcp_server:
         return []
     return [
-        f"Unity MCP（服务 {context.unity_mcp_server}）可用：用它确认工程现状；"
-        "骨架落地后刷新编译、读控制台确认没有编译错误。连不上就如实说明，不要假装验证过。",
+        f"Unity MCP（服务 {context.unity_mcp_server}）可用。按 .cursor/skills/work-feature/unity-mcp.md 的边界使用："
+        "改完脚本后刷新编译、读控制台确认没有编译错误，需要在编辑器里接线或绑引用时用它。",
+        "MCP 连不上时如实写进该项的 blockedReason 或说明，不要假装验证过。",
+    ]
+
+
+def _mcp_read_only_lines(context: PromptContext) -> list[str]:
+    if not context.unity_mcp_server:
+        return []
+    return [
+        f"Unity MCP（服务 {context.unity_mcp_server}）可用：只用来读场景、预制体层级和现有组件，"
+        "分析阶段不要修改场景或资源。",
     ]
 
 

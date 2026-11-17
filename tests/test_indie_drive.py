@@ -74,24 +74,25 @@ def _plan_payload(status: str = "done") -> dict:
 
 
 def _tasks_payload(status: str = "pending", hooks: list[str] | None = None) -> dict:
+    task = {
+        "id": "T1",
+        "title": "放置炮塔",
+        "slice": "放置炮塔",
+        "goal": "把炮塔放到格子上",
+        "dependsOn": [],
+        "files": ["Assets/_Game/Features/Tower/TowerPlacer.cs"],
+        "prefabNodes": [],
+        "framework": ["EventBus"] if hooks is None else hooks,
+        "acceptance": ["能放下并看到"],
+        "status": status,
+    }
+    if status == "blocked":
+        task["blockedReason"] = "后端：缺 10023 协议（拿塔位数据）"
     return {
         "feature": "demo",
         "designDoc": "design.md",
         "prefabs": [],
-        "tasks": [
-            {
-                "id": "T1",
-                "title": "放置炮塔",
-                "slice": "放置炮塔",
-                "goal": "把炮塔放到格子上",
-                "dependsOn": [],
-                "files": ["Assets/_Game/Features/Tower/TowerPlacer.cs"],
-                "prefabNodes": [],
-                "framework": ["EventBus"] if hooks is None else hooks,
-                "acceptance": ["能放下并看到"],
-                "status": status,
-            }
-        ],
+        "tasks": [task],
     }
 
 
@@ -139,7 +140,9 @@ def _side_effects(root: Path, outcome: dict) -> None:
         if "「建立框架」阶段" in prompt:
             outcome["framework"] = _write_plan(root, outcome.get("framework_status", "done"))
         elif "「拆切片」阶段" in prompt:
-            outcome["tasks"] = _write_tasks(root, hooks=outcome.get("hooks"))
+            outcome["tasks"] = _write_tasks(
+                root, status=outcome.get("slice_status", "pending"), hooks=outcome.get("hooks")
+            )
         elif "「实现一个切片」阶段" in prompt and "T1" in prompt:
             outcome["tasks"] = _write_tasks(root, status="done", hooks=outcome.get("hooks"))
         elif "「功能说明」阶段" in prompt:
@@ -200,6 +203,22 @@ def test_indie_rejects_slices_that_are_not_on_the_framework(tmp_path: Path) -> N
     assert code == 2
     assert agent.stages() == ["analyze"]
     assert state.phase == "analyze"
+
+
+def test_indie_stops_at_analysis_when_a_slice_is_blocked(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _unity_project(tmp_path)
+    _write_plan(tmp_path)
+    state = _state(tmp_path)
+    agent = FakeAgent(_side_effects(tmp_path, {"slice_status": "blocked"}))
+
+    code = _drive(agent, str(tmp_path), state, ProjectProfile(), False)
+
+    assert code == 2
+    assert agent.stages() == ["analyze"]
+    assert state.phase == "analyze"
+    err = capsys.readouterr().err
+    assert "阻断" in err
+    assert "后端：缺 10023 协议" in err
 
 
 def test_indie_without_framework_only_asks_for_declared_hooks(tmp_path: Path) -> None:

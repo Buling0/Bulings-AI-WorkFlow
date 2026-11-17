@@ -65,7 +65,10 @@ from bulings.tasks import (
     write_task_file,
 )
 
-INDEPENDENT_BLOCK_NOTE = "还有不依赖阻塞项的任务会先做。轮到阻塞项时停下，确认后用 resume 重试。"
+BLOCKED_GAP_NOTE = (
+    "分析发现阻断性缺失，已停在分析阶段，未进入写代码。"
+    "按 tasks.json 里 blockedReason 的类别（策划 / 后端 / 美术 / 前端）补齐后 resume。"
+)
 
 
 @dataclass
@@ -664,10 +667,18 @@ def _run_analyze(
             print(_resume_hint(project_root, state.slug), file=sys.stderr)
             return 2
 
+    blocked = [task for task in tasks.tasks if task.status == "blocked"]
+    if blocked:
+        state.phase = "analyze"
+        _save_state(project_root, state)
+        print(BLOCKED_GAP_NOTE, file=sys.stderr)
+        for task in blocked:
+            print(f"- {task.id} {task.title}：{task.blocked_reason or '未写明原因'}", file=sys.stderr)
+        print(_resume_hint(project_root, state.slug), file=sys.stderr)
+        return 2
+
     state.phase = "implement"
     _save_state(project_root, state)
-    if any(task.status == "blocked" for task in tasks.tasks):
-        print(INDEPENDENT_BLOCK_NOTE, file=sys.stderr)
     return 0
 
 
