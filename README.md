@@ -57,7 +57,10 @@ bulings init --project <Unity工程>
 
 两条线也都能在对话里直接说：
 
-- **工作模式**：给出策划案和预制体路径。先分析，再一次做一项任务，全部完成后写功能说明。分析阶段会先做**缺失分析**：把这次做不下去或缺的东西按「策划（策划案和配置补充）/ 后端（协议号和协议缺的数据）/ 美术（预制体和需求不符、缺 UI 或预制体）/ 前端（显示逻辑不清晰）」四类整理出来。阻断性的补齐之前不进入写代码；非阻断性的等流程结束后汇总告知。
+- **工作模式**：给出策划案和预制体路径。先分析，然后**用户确认流程图**，再一次做一项任务，全部完成后写功能说明。
+  - 分析阶段先做**缺失分析**：按「策划（策划案和配置补充）/ 后端（协议号和协议缺的数据）/ 美术（预制体和需求不符、缺 UI 或预制体）/ 前端（显示逻辑不清晰）」四类整理。阻断性的补齐之前不进入写代码；非阻断性的等流程结束后汇总告知。
+  - 同时写一份**流程图** `.bulings/runs/<功能名>/flow.md`（页面交互 + 数据流 + Mermaid），写完停在 `flow` 阶段。看完图跑 `bulings resume --confirm-flow` 才进入实现；`--no-flow` 或 `docs.flow.enabled: false` 可跳过。
+  - **预制体节点绑定优先在预制体内用脚本完成**：已有序列化引用 → 工程的绑定脚本/生成器 → 用 Unity MCP 生成并绑定；不用 `transform.Find` / `GameObject.Find` 这类运行时按名字查找兜底。绑不了就在开发说明的「预制体绑定」里列出要用户补哪几个预制体。
 - **独游模式**：先给一句话玩法灵感，让 Agent 按 `indie-design` 一轮轮出选项、写策划案；定稿后再按 `indie-feature` 先立框架、再按切片做功能。切片前同样先做这套缺失分析。
 
 提示里如果点了阶段或任务编号，就只做那一段。例如只写开发说明、只重做 `T3`，或只推进「剧情」这一轮。
@@ -83,10 +86,12 @@ Agent 在本机运行，工作目录是 Unity 工程。模型默认是 `composer
 同一功能还有未完成的运行时，`run` 不会再开一个 Agent。接着做：
 
 ```powershell
-bulings resume --project <Unity工程> --run <功能名>
+bulings resume --project <Unity工程> --run <功能名> [--confirm-flow | --no-flow]
 ```
 
 不依赖阻塞项的任务会先做。轮到阻塞项时停下。`resume` 会把当前这项改回 `in_progress` 再做，原来的阻塞原因会带进提示。中断留下的 `in_progress` 会重做那一项。`resume` 用运行建立时的模式，`workflow.yaml` 的 `mode` 被改过会先报错。
+
+工作模式分析完会停在 `flow` 阶段等确认：看完 `.bulings/runs/<功能名>/flow.md` 后加 `--confirm-flow` 才进入实现；`--no-flow` 跳过这张图。流程图没写出来、没有 mermaid 图或明显是空壳时，`--confirm-flow` 会拒绝并列出问题。
 
 例外是分析阶段：这时出现的 `blocked` 任务就是缺失分析判定的阻断项，命令直接退出 `2`、按类别列出来，不进入写代码。补齐后 `resume`，`blocked` 任务会改回 `in_progress` 重做。非阻断的缺失不拦流程，写进开发说明和功能说明的「缺失与待补齐」，并在流程结束时汇总告知。
 
@@ -221,6 +226,9 @@ docs:
   featureDoc:
     enabled: true
     path: Docs/AI/Features/{feature}.md
+  flow:                 # 工作模式的流程图门禁
+    enabled: true
+    path: .bulings/runs/{feature}/flow.md
 project:
   codeRoots: []
   namespaces: []

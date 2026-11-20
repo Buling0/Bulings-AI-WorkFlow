@@ -22,6 +22,7 @@ DEFAULT_FRAMEWORK_DOC = "Docs/AI/Frameworks/{game}.md"
 DEFAULT_GDD = "Docs/AI/GameDesigns/{feature}.md"
 DEFAULT_GDD_ROUNDS = 4
 DEFAULT_GDD_OPTIONS = 3
+DEFAULT_FLOW_PATH = ".bulings/runs/{feature}/flow.md"
 _UNSAFE_FEATURE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 _LEADING_DOTS = re.compile(r"^\.+")
 
@@ -51,9 +52,18 @@ class DocSetting:
 
 
 @dataclass
+class FlowConfig:
+    """工作模式的流程图门禁：写代码前先出页面交互与数据流图。"""
+
+    enabled: bool = True
+    path: str = DEFAULT_FLOW_PATH
+
+
+@dataclass
 class DocsConfig:
     dev_spec: DocSetting
     feature_doc: DocSetting
+    flow: FlowConfig = field(default_factory=FlowConfig)
 
 
 @dataclass
@@ -112,6 +122,7 @@ class RunOverrides:
     no_dev_spec: bool = False
     no_feature_doc: bool = False
     no_framework: bool = False
+    no_flow: bool = False
 
 
 @dataclass
@@ -127,6 +138,8 @@ class ResolvedRunConfig:
     framework_plan_path: str = ""
     framework_doc_path: str = ""
     framework_doc_enabled: bool = True
+    flow_enabled: bool = True
+    flow_path: str = ""
 
 
 def workflow_file(project_root: str | os.PathLike[str]) -> Path:
@@ -160,6 +173,7 @@ def merge_config(raw: object) -> WorkflowConfig:
     docs = _as_object(root.get("docs")) or {}
     dev_spec = _as_object(docs.get("devSpec")) or {}
     feature_doc = _as_object(docs.get("featureDoc")) or {}
+    flow = _as_object(docs.get("flow")) or {}
     project = _as_object(root.get("project")) or {}
     unity = _as_object(root.get("unity")) or {}
     mcp = _as_object(unity.get("mcp")) or {}
@@ -205,6 +219,10 @@ def merge_config(raw: object) -> WorkflowConfig:
             feature_doc=DocSetting(
                 enabled=_as_boolean(feature_doc.get("enabled"), True),
                 path=_non_empty_string(feature_doc.get("path"), DEFAULT_FEATURE_DOC),
+            ),
+            flow=FlowConfig(
+                enabled=_as_boolean(flow.get("enabled"), True),
+                path=_non_empty_string(flow.get("path"), DEFAULT_FLOW_PATH),
             ),
         ),
         project=ProjectProfile(
@@ -262,6 +280,8 @@ def resolve_run_config(
         framework_plan_path=resolve_template(config.framework.plan, {"feature": token, "game": game}, project_root),
         framework_doc_path=resolve_template(config.framework.doc, {"feature": token, "game": game}, project_root),
         framework_doc_enabled=config.framework.doc_enabled,
+        flow_enabled=config.docs.flow.enabled and not overrides.no_flow,
+        flow_path=resolve_template(config.docs.flow.path, {"feature": token, "game": game}, project_root),
     )
 
 

@@ -11,6 +11,10 @@ docs:
   featureDoc:
     enabled: true
     path: Docs/AI/Features/{feature}.md
+  # 工作模式的流程图门禁：分析阶段先写页面交互与数据流图，用户 resume --confirm-flow 后才写代码。
+  flow:
+    enabled: true
+    path: .bulings/runs/{feature}/flow.md
 
 # Unity MCP：bulings init 会把它合并写入 .cursor/mcp.json（已有同名条目不覆盖）。
 # 默认指向本机 HTTP 服务；用 stdio 启动时填 command/args 并清空 url。

@@ -32,6 +32,8 @@ class PromptContext:
     framework_summary: str = ""
     framework_hooks: str = ""
     framework_paradigm: str = ""
+    flow_enabled: bool = False
+    flow_path: str = ""
     project_root: str = ""
 
 
@@ -101,10 +103,26 @@ def analyze_prompt(context: PromptContext) -> str:
             "非阻断项任务照常 pending，记进开发说明的「缺失与待补齐」。拿不准的按阻断处理。",
             "有阻断项就在分析结束时按四类汇报并停下等补齐，不要继续实现，也不要用占位实现冒充完成；"
             "非阻断项不打断流程，等流程结束后汇总一次。",
+            "预制体节点引用一律优先在预制体内用脚本绑定（已有序列化引用 → 工程的绑定脚本/生成器 → 用 Unity MCP 生成并绑定）。"
+            "不要用 transform.Find / GameObject.Find 这类运行时按名字查找兜底；"
+            "实在绑不了，在开发说明的「预制体绑定」里列出「哪个预制体、哪个节点、要绑什么、为什么」，并在回复里告诉用户补哪几个预制体。",
+            *_flow_prompt_lines(context),
             "tasks.json 的 status 只能是 pending、in_progress、done、blocked。至少一项任务。id 不要重复。",
             "策划、预制体或协议对不上时，不要脑补：该项 status 为 blocked，并写 blockedReason。",
         ]
     )
+
+
+def _flow_prompt_lines(context: PromptContext) -> list[str]:
+    if not context.flow_enabled:
+        return []
+    return [
+        f"这个功能要过流程图门禁：分析阶段除了 tasks.json，还要写 {context.flow_path}，"
+        "内容至少包含「页面与入口」「页面交互流程」「数据流向」，并附一张 mermaid 图。"
+        "最后一行写 <!-- flow-status: draft -->，不要自己改成 confirmed。",
+        "流程图是给你确认整体结构用的：页面怎么连、数据从哪来到哪去。写完就停，用户确认后会继续实现。",
+        "流程图没写出来或只有空壳时，工作流会在实现前把它拦下来。",
+    ]
 
 
 def implement_prompt(context: PromptContext, task: FeatureTask, retry: bool) -> str:
@@ -128,10 +146,16 @@ def implement_prompt(context: PromptContext, task: FeatureTask, retry: bool) -> 
         f"完成标准：{acceptance}",
         f"任务文件：{context.tasks_path}",
         dev_spec,
-        _protected_line(context.protected_paths),
+    ]
+    if context.flow_enabled and context.flow_path:
+        lines.append(f"流程图（用户已确认）：{context.flow_path}。按它写，不要偏离页面交互和数据流向。")
+    lines.append(_protected_line(context.protected_paths))
+    lines += [
         "做完把该任务标成 done。无法在不脑补的前提下完成时标成 blocked，并写 blockedReason。",
         "实现中才发现缺东西时：阻断项（缺规则、协议、预制体节点、显示逻辑）标 blocked，blockedReason 以类别开头"
         "（策划 / 后端 / 美术 / 前端）写清缺什么，然后停下；非阻断项先用保守做法做完，记进开发说明的「缺失与待补齐」。",
+        "预制体节点引用优先在预制体内用脚本绑定（已有序列化引用 → 工程的绑定脚本/生成器 → Unity MCP 生成并绑定），"
+        "不要用 transform.Find / GameObject.Find 兜底；绑不了就在「预制体绑定」里写清楚要用户补哪个预制体，不要自己按名字找。",
         "不要创建 git commit。不要修改 .meta 的 guid。",
     ]
     return "\n".join(line for line in lines if line != "")

@@ -15,10 +15,10 @@ HELP_TEXT = """用法
   bulings design --project <Unity工程> --name <策划案名> --decide <选项id>[,<选项id>] [--note "补充想法"] [--model <模型>]
   bulings design --project <Unity工程> --name <策划案名> --finish [--force]
   bulings design --project <Unity工程> --name <策划案名> --history [--json]
-  bulings run --project <Unity工程> --design <策划案> [--prefab <预制体> ...] [--name <功能名>] [--dev-spec <路径>] [--feature-doc <路径>] [--no-dev-spec] [--no-feature-doc] [--no-framework] [--model <模型>]
+  bulings run --project <Unity工程> --design <策划案> [--prefab <预制体> ...] [--name <功能名>] [--dev-spec <路径>] [--feature-doc <路径>] [--no-dev-spec] [--no-feature-doc] [--no-framework] [--no-flow] [--model <模型>]
   bulings split --project <Unity工程> --design <策划案> [--name <功能名>] [--output <路径>] [--model <模型>]
   bulings kb --project <Unity工程> --action <init|update|check> [--name <功能名>] [--model <模型>]
-  bulings resume --project <Unity工程> --run <slug>
+  bulings resume --project <Unity工程> --run <slug> [--confirm-flow | --no-flow]
   bulings status --project <Unity工程> [--json]
   bulings doctor --project <Unity工程>
   bulings audit --project <Unity工程> [--json]
@@ -38,6 +38,11 @@ HELP_TEXT = """用法
   status  一屏看完策划案、框架、运行和下一步（--json 输出机器可读结果）。
   doctor  检查工程、workflow.yaml、Skill、密钥、Unity MCP 和框架状态。
   audit   看工作区改动有没有碰 protectedPaths、.meta 或 codeRoots 之外的文件。
+
+流程图门禁（工作模式）
+  分析阶段会写 .bulings/runs/<功能名>/flow.md（页面交互 + 数据流），写完停在 flow 阶段。
+  看完图后 resume --confirm-flow 才进入写代码；--no-flow 跳过这张图。
+  关掉整条门禁：workflow.yaml 的 docs.flow.enabled: false。
 
 环境变量
   CURSOR_API_KEY   Cursor 用户 API key
@@ -72,6 +77,8 @@ class ParsedArgs:
     no_dev_spec: bool = False
     no_feature_doc: bool = False
     no_framework: bool = False
+    no_flow: bool = False
+    confirm_flow: bool = False
     model: str | None = None
     run: str | None = None
     output: str | None = None
@@ -184,6 +191,7 @@ def run_command(args: ParsedArgs, project: str) -> int:
                 no_dev_spec=args.no_dev_spec,
                 no_feature_doc=args.no_feature_doc,
                 no_framework=args.no_framework,
+                no_flow=args.no_flow,
             ),
         )
     )
@@ -237,7 +245,9 @@ def resume_command(args: ParsedArgs, project: str) -> int:
         return 1
     from bulings.runner import ResumeCommand, resume_workflow
 
-    return resume_workflow(ResumeCommand(project=project, slug=args.run))
+    return resume_workflow(
+        ResumeCommand(project=project, slug=args.run, confirm_flow=args.confirm_flow, no_flow=args.no_flow)
+    )
 
 
 def status_command(args: ParsedArgs, project: str) -> int:
@@ -285,6 +295,8 @@ def parse_args(argv: list[str]) -> ParsedArgs:
         force=namespace.force,
         history=namespace.history,
         json=namespace.json,
+        confirm_flow=namespace.confirm_flow,
+        no_flow=namespace.no_flow,
         help=namespace.help,
     )
 
@@ -317,6 +329,8 @@ def _build_parser() -> BulingsParser:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--history", action="store_true")
     parser.add_argument("--json", dest="json", action="store_true")
+    parser.add_argument("--confirm-flow", dest="confirm_flow", action="store_true")
+    parser.add_argument("--no-flow", dest="no_flow", action="store_true")
     parser.add_argument("--no-dev-spec", action="store_true")
     parser.add_argument("--no-feature-doc", action="store_true")
     parser.add_argument("--no-framework", action="store_true")

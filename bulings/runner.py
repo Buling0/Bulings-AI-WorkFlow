@@ -6,6 +6,7 @@ import os
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,12 @@ from bulings.config import (
     to_project_path,
 )
 from bulings.framework import hook_aliases, plan_summary, read_framework_plan
+from bulings.flowchart import (
+    confirm_flow_file,
+    describe_flow_gate,
+    flow_file_path,
+    flow_problems,
+)
 from bulings.gdd import (
     GddOption,
     design_brief_path,
@@ -133,6 +140,8 @@ class DesignCommand:
 class ResumeCommand:
     project: str
     slug: str
+    confirm_flow: bool = False
+    no_flow: bool = False
 
 
 @dataclass
@@ -173,6 +182,8 @@ class RunState:
     framework_plan_path: str = ""
     framework_doc_path: str = ""
     framework_doc_enabled: bool = True
+    flow_enabled: bool = True
+    flow_path: str = ""
 
 
 def run_workflow(command: RunCommand) -> int:
@@ -210,6 +221,8 @@ def run_workflow(command: RunCommand) -> int:
         framework_plan_path=resolved.framework_plan_path,
         framework_doc_path=resolved.framework_doc_path,
         framework_doc_enabled=resolved.framework_doc_enabled,
+        flow_enabled=resolved.flow_enabled,
+        flow_path=resolved.flow_path,
     )
 
     existing = _read_state(_state_path(project_root, state.slug))
@@ -236,7 +249,7 @@ def run_workflow(command: RunCommand) -> int:
             state.agent_id = agent.agent_id
             print(f"agentId={agent.agent_id}", flush=True)
             _save_state(project_root, state)
-            return _drive(agent, project_root, state, config.project, False)
+            return _drive(agent, project_root, state, config.project, False, no_flow=command.overrides.no_flow)
     except CursorAgentError as error:
         return _handle_startup_error(error)
 
@@ -288,6 +301,8 @@ def split_workflow(command: SplitCommand) -> int:
         feature_doc_path="",
         model=(command.model or "").strip() or config.model,
         phase="split",
+        mode=config.mode,
+        flow_enabled=False,
     )
     try:
         with Agent.create(
@@ -672,7 +687,15 @@ def resume_workflow(command: ResumeCommand) -> int:
             ),
         ) as agent:
             print(f"agentId={agent.agent_id}", flush=True)
-            return _drive(agent, project_root, state, config.project, True)
+            return _drive(
+                agent,
+                project_root,
+                state,
+                config.project,
+                True,
+                command.confirm_flow,
+                command.no_flow,
+            )
     except CursorAgentError as error:
         return _handle_startup_error(error)
 
@@ -683,6 +706,8 @@ def _drive(
     state: RunState,
     project: ProjectProfile,
     resuming: bool,
+    confirm_flow: bool = False,
+    no_flow: bool = False,
 ) -> int:
     strategy = strategy_for(state.mode, _prompt_context(project_root, state, project))
     prepared = _run_prepare(agent, project_root, state, strategy)
@@ -690,12 +715,35 @@ def _drive(
         return prepared
     _audit_after_phase(project_root, project, "框架")
 
+    if no_flow:
+        state.flow_enabled = False
+    if state.phase == "flow" and confirm_flow:
+        problems = _confirm_flow(project_root, state)
+        if problems:
+            print("流程图还不能确认：", file=sys.stderr)
+            for item in problems:
+                print(f"- {item}", file=sys.stderr)
+            print(_resume_hint(project_root, state.slug), file=sys.stderr)
+            return 2
+        state.phase = "implement"
+        _save_state(project_root, state)
+    if state.phase == "flow" and no_flow:
+        print("[流程图] 已用 --no-flow 跳过确认，直接进入实现。", file=sys.stderr)
+        state.phase = "implement"
+        _save_state(project_root, state)
+
     if state.phase == "analyze":
         analyzed = _run_analyze(agent, project_root, state, project, strategy)
         if analyzed != 0:
             return analyzed
         _audit_after_phase(project_root, project, "分析")
         resuming = False
+        if _flow_gate_applies(state) and not (confirm_flow or no_flow):
+            return _stop_at_flow_gate(project_root, state)
+
+    if state.phase == "flow":
+        # 走到这里说明用户没有确认流程图（确认走 resume --confirm-flow）。
+        return _stop_at_flow_gate(project_root, state)
 
     if state.phase == "document" and not _all_tasks_done(project_root, state.slug):
         state.phase = "implement"
@@ -733,6 +781,40 @@ def _audit_after_phase(project_root: str, project: ProjectProfile, phase: str) -
     report = audit_workspace(project_root, project.protected_paths, project.code_roots)
     for line in format_audit_errors(report):
         print(f"{line}（{phase}阶段结束）", file=sys.stderr)
+
+
+def _flow_gate_applies(state: RunState) -> bool:
+    """流程图门禁只管工作模式；独游模式有自己的框架和切片校验。"""
+    return state.mode == "work" and state.flow_enabled
+
+
+def _flow_file(project_root: str, state: RunState) -> Path:
+    if state.flow_path:
+        return Path(state.flow_path)
+    return flow_file_path(project_root, state.slug)
+
+
+def _stop_at_flow_gate(project_root: str, state: RunState) -> int:
+    state.phase = "flow"
+    _save_state(project_root, state)
+    print(describe_flow_gate(state.feature, state.slug, _flow_file(project_root, state)), file=sys.stderr)
+    print(
+        "流程图确认之前不进入写代码。看不到图就先补 `.bulings/runs/<功能名>/flow.md`。",
+        file=sys.stderr,
+    )
+    return 2
+
+
+def _confirm_flow(project_root: str, state: RunState) -> list[str]:
+    """写完确认标记。返回空列表表示确认成功。"""
+    path = _flow_file(project_root, state)
+    problems = flow_problems(path)
+    if problems:
+        return problems
+    if not confirm_flow_file(path, datetime.now().isoformat(timespec="seconds")):
+        return [f"写不了流程图的确认标记：{path}"]
+    print(f"[流程图] 已确认：{path}", file=sys.stderr)
+    return []
 
 
 def audit_workflow(command: AuditCommand) -> int:
@@ -1029,6 +1111,8 @@ def _prompt_context(project_root: str, state: RunState, project: ProjectProfile)
         framework_summary=plan_summary(plan) if plan is not None else "",
         framework_hooks=hook_aliases(plan) if plan is not None else "",
         framework_paradigm=full_config.framework.paradigm,
+        flow_enabled=state.flow_enabled and state.mode == "work",
+        flow_path=to_project_path(project_root, state.flow_path) if state.flow_path else "",
         project_root=project_root,
     )
 
@@ -1150,6 +1234,8 @@ def _read_state(file_path: Path) -> RunState | None:
         framework_doc_enabled=parsed.get("frameworkDocEnabled")
         if isinstance(parsed.get("frameworkDocEnabled"), bool)
         else True,
+        flow_enabled=parsed.get("flowEnabled") if isinstance(parsed.get("flowEnabled"), bool) else True,
+        flow_path=parsed["flowPath"] if isinstance(parsed.get("flowPath"), str) else "",
     )
 
 
@@ -1176,6 +1262,9 @@ def _state_to_dict(state: RunState) -> dict[str, Any]:
     if state.framework_doc_path:
         data["frameworkDocPath"] = state.framework_doc_path
     data["frameworkDocEnabled"] = state.framework_doc_enabled
+    data["flowEnabled"] = state.flow_enabled
+    if state.flow_path:
+        data["flowPath"] = state.flow_path
     if state.current_task_id:
         data["currentTaskId"] = state.current_task_id
     if state.last_run_id:
