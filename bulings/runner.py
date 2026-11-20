@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -10,6 +11,7 @@ from typing import Any
 
 from cursor_sdk import Agent, AgentOptions, CursorAgentError, LocalAgentOptions
 
+from bulings.audit import audit_workspace, format_audit_errors
 from bulings.config import (
     ProjectProfile,
     RunOverrides,
@@ -26,9 +28,12 @@ from bulings.gdd import (
     GddOption,
     design_brief_path,
     design_plan_path,
+    design_round_snapshot_path,
     dimension_title,
     find_options,
+    finish_dimension_errors,
     gdd_summary,
+    is_finished,
     option_ids,
     parse_decisions,
     pending_dimensions,
@@ -36,6 +41,16 @@ from bulings.gdd import (
     read_gdd_plan,
     stage_title,
     validate_round,
+    write_design_snapshot,
+)
+from bulings.views import (
+    build_status,
+    design_history,
+    doctor_checks,
+    doctor_lines,
+    history_lines,
+    status_json,
+    status_lines,
 )
 from bulings.install import is_unity_project, mcp_server_entry
 from bulings.modes import (
@@ -62,6 +77,7 @@ from bulings.tasks import (
     read_task_file,
     reopen_blocked_task,
     select_next_task,
+    unmet_dependencies,
     write_task_file,
 )
 
@@ -107,6 +123,9 @@ class DesignCommand:
     decide: str | None = None
     note: str | None = None
     finish: bool = False
+    force: bool = False
+    history: bool = False
+    json: bool = False
     model: str | None = None
 
 
@@ -114,6 +133,23 @@ class DesignCommand:
 class ResumeCommand:
     project: str
     slug: str
+
+
+@dataclass
+class AuditCommand:
+    project: str
+    json: bool = False
+
+
+@dataclass
+class StatusCommand:
+    project: str
+    as_json: bool = False
+
+
+@dataclass
+class DoctorCommand:
+    project: str
 
 
 @dataclass
@@ -136,6 +172,7 @@ class RunState:
     framework_enabled: bool = False
     framework_plan_path: str = ""
     framework_doc_path: str = ""
+    framework_doc_enabled: bool = True
 
 
 def run_workflow(command: RunCommand) -> int:
@@ -172,6 +209,7 @@ def run_workflow(command: RunCommand) -> int:
         framework_enabled=resolved.framework_enabled,
         framework_plan_path=resolved.framework_plan_path,
         framework_doc_path=resolved.framework_doc_path,
+        framework_doc_enabled=resolved.framework_doc_enabled,
     )
 
     existing = _read_state(_state_path(project_root, state.slug))
@@ -359,6 +397,9 @@ def design_workflow(command: DesignCommand) -> int:
     wanted = parse_decisions(command.decide) if command.decide else []
     note = (command.note or "").strip()
 
+    if command.history:
+        return _print_design_history(project_root, slug, command.json)
+
     if command.idea and previous is not None:
         print(
             f"{slug} 已经有第 {previous.round} 轮的策划案。继续用 --decide / --note，定稿用 --finish；"
@@ -382,7 +423,7 @@ def design_workflow(command: DesignCommand) -> int:
 
     if not command.idea and not wanted and not note and not command.finish:
         assert previous is not None
-        _print_design_status(project_root, previous, slug)
+        _print_design_status(project_root, previous, slug, config.design.rounds)
         return 0
 
     if _ensure_skill(project_root, INDIE_DESIGN_SKILL_DIR) != 0:
@@ -394,6 +435,7 @@ def design_workflow(command: DesignCommand) -> int:
     if idea_text is not None:
         _write_design_brief(brief_path, idea_text, idea_source, project_root)
 
+    doc_before = _design_doc_signature(doc_path)
     round_no = previous.round + 1 if previous is not None else 1
     stage = _next_design_stage(previous)
     context = GddContext(
@@ -438,17 +480,32 @@ def design_workflow(command: DesignCommand) -> int:
             file=sys.stderr,
         )
         return 2
-    errors = validate_round(previous, current, wanted)
+    errors = validate_round(previous, current, wanted, note_given=bool(note))
     if errors:
         print(f"第 {round_no} 轮没有推进到位，已停止：", file=sys.stderr)
         for item in errors:
             print(f"- {item}", file=sys.stderr)
         return 2
 
+    _save_design_snapshot(project_root, slug, round_no, plan_path)
+    if _design_doc_signature(doc_path) == doc_before:
+        print(
+            f"警告：第 {round_no} 轮 {context.doc_path} 没有变化。这一轮的状态文件更新了，正文没更新。",
+            file=sys.stderr,
+        )
+
     if command.finish:
         if current.status != "done":
             print("定稿那一轮 status 必须写成 done。", file=sys.stderr)
             return 2
+        dimension_errors = finish_dimension_errors(current)
+        if dimension_errors:
+            if not command.force:
+                print("定稿没有通过：", file=sys.stderr)
+                for item in dimension_errors:
+                    print(f"- {item}", file=sys.stderr)
+                return 2
+            print("警告：--force 绕过了维度确认要求。", file=sys.stderr)
         if not os.path.isfile(doc_path) or os.path.getsize(doc_path) == 0:
             print(f"定稿结束，但 {context.doc_path} 不存在或是空的。", file=sys.stderr)
             return 2
@@ -456,7 +513,65 @@ def design_workflow(command: DesignCommand) -> int:
         print(f"接着做：bulings run --project <Unity工程> --design {context.doc_path} --name {slug}")
         return 0
 
-    _print_design_status(project_root, current, slug)
+    _print_design_status(project_root, current, slug, config.design.rounds)
+    return 0
+
+
+def _design_doc_signature(path: str) -> str | None:
+    """策划案正文的指纹。用内容哈希，mtime 靠不住（同尺寸快速重写可能不变）。"""
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return None
+    return hashlib.sha256(data).hexdigest()
+
+
+def _save_design_snapshot(project_root: str, slug: str, round_no: int, plan_path: Path) -> None:
+    try:
+        content = plan_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    write_design_snapshot(project_root, slug, round_no, content)
+
+
+def status_workflow(command: StatusCommand) -> int:
+    project_root = os.path.abspath(command.project)
+    config = _load_config_or_explain(project_root)
+    if config is None:
+        return 1
+    view = build_status(project_root, config)
+    if command.as_json:
+        print(status_json(view))
+        return 0
+    for line in status_lines(view):
+        print(line)
+    return 0
+
+
+def doctor_workflow(command: DoctorCommand) -> int:
+    project_root = os.path.abspath(command.project)
+    config = _load_config_or_explain(project_root)
+    items = doctor_checks(project_root, config)
+    for line in doctor_lines(items):
+        print(line)
+    return 1 if any(item.level == "fail" for item in items) else 0
+
+
+def _load_config_or_explain(project_root: str) -> Any:
+    try:
+        return load_workflow_config(project_root)
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return None
+
+
+def _print_design_history(project_root: str, slug: str, as_json: bool) -> int:
+    rounds = design_history(project_root, slug)
+    if as_json:
+        print(json.dumps({"slug": slug, "rounds": rounds}, ensure_ascii=False, indent=2))
+        return 0
+    for line in history_lines(slug, rounds):
+        print(line)
     return 0
 
 
@@ -486,6 +601,8 @@ def _next_design_stage(previous: Any) -> str:
     """这一轮该推进哪个阶段：按 玩法 → 剧情 → 风格 → 流程 → 收尾 走。"""
     if previous is None:
         return "core"
+    if is_finished(previous):
+        return "done"
     mapping = {"gameplay": "core", "story": "story", "style": "style", "flow": "flow"}
     pending = pending_dimensions(previous)
     return mapping[pending[0]] if pending else "polish"
@@ -500,14 +617,15 @@ def _decision_line(option: GddOption) -> str:
     return "".join(parts)
 
 
-def _print_design_status(project_root: str, plan: Any, slug: str) -> None:
-    for line in plan_status_lines(plan):
+def _print_design_status(project_root: str, plan: Any, slug: str, suggested_rounds: int = 0) -> None:
+    for line in plan_status_lines(plan, suggested_rounds):
         print(line)
     if plan.options:
         print("下一步：bulings design --project <Unity工程> --name " + slug + " --decide <id>[,<id>]")
-        print('       补充想法：--note "..."；定稿：--finish；只看状态：不带参数再跑一次')
+        print('       补充想法：--note "..."；定稿：--finish；回看：--history；只看状态：不带参数再跑一次')
     else:
         print('这一轮没有新选项。用 --note 补充，或 --finish 定稿。')
+        print(f"回看每轮记录：bulings design --project <Unity工程> --name {slug} --history")
 
 
 def resume_workflow(command: ResumeCommand) -> int:
@@ -570,11 +688,13 @@ def _drive(
     prepared = _run_prepare(agent, project_root, state, strategy)
     if prepared != 0:
         return prepared
+    _audit_after_phase(project_root, project, "框架")
 
     if state.phase == "analyze":
         analyzed = _run_analyze(agent, project_root, state, project, strategy)
         if analyzed != 0:
             return analyzed
+        _audit_after_phase(project_root, project, "分析")
         resuming = False
 
     if state.phase == "document" and not _all_tasks_done(project_root, state.slug):
@@ -600,10 +720,45 @@ def _drive(
     documented = _run_document(agent, project_root, state, project, strategy)
     if documented != 0:
         return documented
+    _audit_after_phase(project_root, project, "功能说明")
 
     state.phase = "done"
     _save_state(project_root, state)
     print(f"功能说明已写入 {to_project_path(project_root, state.feature_doc_path)}")
+    return 0
+
+
+def _audit_after_phase(project_root: str, project: ProjectProfile, phase: str) -> None:
+    """每个阶段结束后只报错误级审计问题，不改变退出码。"""
+    report = audit_workspace(project_root, project.protected_paths, project.code_roots)
+    for line in format_audit_errors(report):
+        print(f"{line}（{phase}阶段结束）", file=sys.stderr)
+
+
+def audit_workflow(command: AuditCommand) -> int:
+    project_root = os.path.abspath(command.project)
+    unity_error = _unity_check(project_root)
+    if unity_error != 0:
+        return unity_error
+
+    config = load_workflow_config(project_root)
+    report = audit_workspace(project_root, config.project.protected_paths, config.project.code_roots)
+    if command.json:
+        payload = {
+            "git": report.is_git,
+            "changed": report.changed,
+            "findings": [
+                {"level": item.level, "path": item.path, "message": item.message} for item in report.findings
+            ],
+        }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        for line in report.lines():
+            print(line)
+        if report.errors:
+            print("审计发现错误级问题：先处理这些文件，再提交。", file=sys.stderr)
+    if not report.ok:
+        return 1
     return 0
 
 
@@ -713,7 +868,9 @@ def _run_implement(
             state.phase = "implement"
             state.current_task_id = nxt.task.id
             _save_state(project_root, state)
-            print(f"任务 {nxt.task.id} 的依赖无法满足，已停止。", file=sys.stderr)
+            waiting = unmet_dependencies(nxt.task, task_file.tasks)
+            detail = f"（还差：{'、'.join(waiting)}）" if waiting else ""
+            print(f"任务 {nxt.task.id} 的依赖无法满足{detail}，已停止。", file=sys.stderr)
             return 2
         if nxt.task is None:
             print("没有可执行的任务，已停止。", file=sys.stderr)
@@ -868,6 +1025,7 @@ def _prompt_context(project_root: str, state: RunState, project: ProjectProfile)
         framework_enabled=state.framework_enabled,
         framework_plan_path=to_project_path(project_root, state.framework_plan_path) if state.framework_plan_path else "",
         framework_doc_path=to_project_path(project_root, state.framework_doc_path) if state.framework_doc_path else "",
+        framework_doc_enabled=state.framework_doc_enabled,
         framework_summary=plan_summary(plan) if plan is not None else "",
         framework_hooks=hook_aliases(plan) if plan is not None else "",
         framework_paradigm=full_config.framework.paradigm,
@@ -989,6 +1147,9 @@ def _read_state(file_path: Path) -> RunState | None:
         framework_enabled=parsed.get("frameworkEnabled") if isinstance(parsed.get("frameworkEnabled"), bool) else False,
         framework_plan_path=parsed["frameworkPlanPath"] if isinstance(parsed.get("frameworkPlanPath"), str) else "",
         framework_doc_path=parsed["frameworkDocPath"] if isinstance(parsed.get("frameworkDocPath"), str) else "",
+        framework_doc_enabled=parsed.get("frameworkDocEnabled")
+        if isinstance(parsed.get("frameworkDocEnabled"), bool)
+        else True,
     )
 
 
@@ -1014,6 +1175,7 @@ def _state_to_dict(state: RunState) -> dict[str, Any]:
         data["frameworkPlanPath"] = state.framework_plan_path
     if state.framework_doc_path:
         data["frameworkDocPath"] = state.framework_doc_path
+    data["frameworkDocEnabled"] = state.framework_doc_enabled
     if state.current_task_id:
         data["currentTaskId"] = state.current_task_id
     if state.last_run_id:

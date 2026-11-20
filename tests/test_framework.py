@@ -3,7 +3,9 @@ import tempfile
 from pathlib import Path
 
 from bulings.framework import (
+    framework_doc_problems,
     framework_drift,
+    framework_path_findings,
     framework_ready,
     hook_aliases,
     known_hooks,
@@ -136,6 +138,43 @@ def test_read_plan_returns_none_for_missing_or_invalid_files() -> None:
         good = root / "framework.json"
         good.write_text(json.dumps(_plan(), ensure_ascii=False), encoding="utf-8")
         assert read_framework_plan(good) is not None
+
+
+def test_rejects_absolute_paths() -> None:
+    assert parse_framework_plan(_plan(root="C:/Game/Assets")) is None
+    assert parse_framework_plan(_plan(root="/Assets")) is None
+    assert parse_framework_plan(_plan(systems=[_system(paths=["C:/Game/Core"])])) is None
+    assert parse_framework_plan(_plan(extensionPoints=[{"name": "Save", "howTo": "加字段", "path": "D:/x"}])) is None
+
+
+def test_doc_problems_flag_missing_and_template_docs() -> None:
+    with tempfile.TemporaryDirectory(prefix="bulings-framework-doc-") as directory:
+        root = Path(directory)
+        plan = parse_framework_plan(_plan())
+        assert plan is not None
+        missing = root / "Docs" / "Frameworks" / "game.md"
+        assert framework_doc_problems(plan, str(missing))
+        missing.parent.mkdir(parents=True)
+        missing.write_text("{game} 框架\n\n## 范式\n", encoding="utf-8")
+        assert any("模板骨架" in item for item in framework_doc_problems(plan, str(missing)))
+        missing.write_text(
+            "# game 框架\n\n## 范式\n\n轻量自建。\n\n## 扩展点\n\n| 新事件 | 定义 XxxEvent | Core/Events |\n",
+            encoding="utf-8",
+        )
+        assert framework_doc_problems(plan, str(missing)) == []
+
+
+def test_path_findings_cover_root_extension_points_and_doc() -> None:
+    with tempfile.TemporaryDirectory(prefix="bulings-framework-findings-") as directory:
+        root = Path(directory)
+        plan = parse_framework_plan(
+            _plan(root="Assets/DoesNotExist", extensionPoints=[{"name": "EventBus", "howTo": "Send/Subscribe"}])
+        )
+        assert plan is not None
+        findings = framework_path_findings(plan, root, str(root / "missing-doc.md"))
+        assert any("代码根目录不存在" in item for item in findings)
+        assert any("框架文档没有写出来" in item for item in findings)
+        assert any("扩展点没覆盖" in item for item in findings)
 
 
 def test_plan_summary_mentions_hooks_and_conventions() -> None:

@@ -96,11 +96,27 @@ def _tasks_payload(status: str = "pending", hooks: list[str] | None = None) -> d
     }
 
 
-def _write_plan(root: Path, status: str = "done") -> Path:
+def _write_plan(root: Path, status: str = "done", write_doc: bool = True) -> Path:
     path = root / ".bulings" / "indie" / "framework.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(_plan_payload(status), ensure_ascii=False), encoding="utf-8")
+    if write_doc:
+        _write_framework_doc(root)
     return path
+
+
+def _write_framework_doc(root: Path) -> Path:
+    doc = root / "Docs" / "AI" / "Frameworks" / "game.md"
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text(
+        "# game 框架\n\n## 范式\n\n轻量自建，Bootstrap + EventBus + 状态机。\n\n"
+        "## 分层与依赖方向\n\nCore → Features 单向依赖。\n\n"
+        "## 扩展点\n\n| 扩展点 | 怎么加 | 位置 |\n| --- | --- | --- |\n"
+        "| 新状态 | 新建 XxxState | Core/State |\n| 新事件 | 定义 XxxEvent | Core/Events |\n"
+        "| 新配置 | 新建 SO | Core/Config |\n| 新存档字段 | 加字段 | Core/Save |\n",
+        encoding="utf-8",
+    )
+    return doc
 
 
 def _write_tasks(root: Path, status: str = "pending", hooks: list[str] | None = None) -> Path:
@@ -178,6 +194,21 @@ def test_indie_stops_when_the_framework_is_not_ready(tmp_path: Path) -> None:
     assert agent.stages() == ["framework"]
     assert state.phase == "framework"
     assert not (tmp_path / ".bulings" / "runs" / "demo" / "tasks.json").exists()
+
+
+def test_indie_stops_when_the_framework_doc_is_missing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _unity_project(tmp_path)
+    _write_plan(tmp_path, write_doc=False)
+    state = _state(tmp_path)
+    agent = FakeAgent(_side_effects(tmp_path, {}))
+
+    code = _drive(agent, str(tmp_path), state, ProjectProfile(), False)
+
+    assert code == 2
+    assert agent.stages() == []
+    err = capsys.readouterr().err
+    assert "框架文档没有写出来" in err
+    assert "indie.framework.docEnabled" in err
 
 
 def test_indie_skips_the_framework_when_it_is_already_ready(tmp_path: Path) -> None:

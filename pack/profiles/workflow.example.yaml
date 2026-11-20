@@ -34,11 +34,13 @@ clientSplit:
 # 独游模式（mode: indie）：先用 bulings design 从灵感迭代出策划案，
 # 第一次 run 再建立框架基线，然后按纵向切片做功能。
 # framework.enabled: false 或命令行 --no-framework 时跳过框架阶段。
+# framework.docEnabled: false 时不要求写框架文档（默认要求）。
 indie:
   framework:
     enabled: true
     plan: .bulings/indie/framework.json
     doc: Docs/AI/Frameworks/{game}.md
+    docEnabled: true
     paradigm: ""
   design:
     path: Docs/AI/GameDesigns/{feature}.md

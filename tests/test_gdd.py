@@ -12,7 +12,9 @@ from bulings.gdd import (
     design_plan_path,
     dimension_title,
     find_options,
+    finish_dimension_errors,
     gdd_summary,
+    is_finished,
     option_ids,
     option_lines,
     parse_decisions,
@@ -227,6 +229,44 @@ def test_summary_and_display_lines() -> None:
     assert any("维度：" in line for line in status)
     assert any("G1" in line and "实时塔防" in line for line in status)
     assert any("代价：上手更难" in line for line in option_lines(plan))
+
+
+def test_status_lines_show_the_suggested_rounds_and_finish_hint() -> None:
+    plan = parse_gdd_plan(_plan(round=4))
+    assert plan is not None
+    lines = plan_status_lines(plan, suggested_rounds=4)
+    assert any("建议 4 轮" in line for line in lines)
+    assert any("--finish" in line for line in lines)
+
+    early = parse_gdd_plan(_plan(round=1))
+    assert early is not None
+    assert not any("--finish" in line for line in plan_status_lines(early, suggested_rounds=4))
+
+
+def test_validate_round_requires_the_current_round_record() -> None:
+    previous = parse_gdd_plan(_plan(round=1))
+    forgot = parse_gdd_plan(_plan(round=2, chosen=[]))
+    assert previous is not None and forgot is not None
+    errors = validate_round(previous, forgot, [], note_given=True)
+    assert any("没有记进 chosen" in item for item in errors)
+
+    wrong_round = parse_gdd_plan(_plan(round=2, chosen=[{"round": 1, "ids": ["G1"]}]))
+    assert wrong_round is not None
+    assert any("没有记进 chosen" in item for item in validate_round(previous, wrong_round, ["G1"]))
+
+
+def test_finish_dimension_errors_list_unconfirmed_names() -> None:
+    unfinished = parse_gdd_plan(_plan(status="done", options=[]))
+    assert unfinished is not None
+    errors = finish_dimension_errors(unfinished)
+    assert errors and "玩法" in errors[0]
+
+    payload = _plan(status="done", options=[])
+    payload["dimensions"] = {name: _dimension("已定", True) for name in DIMENSIONS}
+    finished = parse_gdd_plan(payload)
+    assert finished is not None
+    assert finish_dimension_errors(finished) == []
+    assert is_finished(finished) is True
     assert "第一轮" in gdd_summary(None)
 
 

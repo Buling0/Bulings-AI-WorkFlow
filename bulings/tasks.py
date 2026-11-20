@@ -110,6 +110,66 @@ def select_next_task(tasks: list[FeatureTask]) -> NextTask:
     return NextTask(kind="done")
 
 
+def validate_task_dependencies(tasks: list[FeatureTask]) -> list[str]:
+    """依赖必须指向真实存在的前置，不能自依赖，也不能成环。"""
+    ids = {task.id for task in tasks}
+    errors: list[str] = []
+    for task in tasks:
+        for dep in task.depends_on:
+            if dep == task.id:
+                errors.append(f"{task.id} 依赖了自己")
+            elif dep not in ids:
+                errors.append(f"{task.id} 依赖的 {dep} 不存在")
+    cycle = _find_dependency_cycle(tasks)
+    if cycle:
+        errors.append("依赖成环：" + " → ".join(cycle))
+    return errors
+
+
+def validate_slice_names(tasks: list[FeatureTask]) -> list[str]:
+    """独游模式下每项任务都要归属一个纵向切片。"""
+    missing = [task.id for task in tasks if not (task.slice or "").strip()]
+    if not missing:
+        return []
+    return [f"这些任务没有写 slice（纵向切片名）：{'、'.join(missing)}"]
+
+
+def unmet_dependencies(task: FeatureTask, tasks: list[FeatureTask]) -> list[str]:
+    """这一项还差哪些依赖没做完，给运行期的等待提示用。"""
+    done = {item.id for item in tasks if item.status == "done"}
+    return [dep for dep in task.depends_on if dep not in done]
+
+
+def _find_dependency_cycle(tasks: list[FeatureTask]) -> list[str]:
+    ids = {task.id for task in tasks}
+    graph = {task.id: [dep for dep in task.depends_on if dep in ids] for task in tasks}
+    state: dict[str, int] = {}
+    stack: list[str] = []
+
+    def visit(node: str) -> list[str] | None:
+        mark = state.get(node, 0)
+        if mark == 1:
+            start = stack.index(node)
+            return stack[start:] + [node]
+        if mark == 2:
+            return None
+        state[node] = 1
+        stack.append(node)
+        for dep in graph.get(node, []):
+            found = visit(dep)
+            if found:
+                return found
+        stack.pop()
+        state[node] = 2
+        return None
+
+    for task in tasks:
+        found = visit(task.id)
+        if found:
+            return found
+    return []
+
+
 def mark_task_in_progress(task_file: TaskFile, task_id: str) -> TaskFile:
     tasks: list[FeatureTask] = []
     for task in task_file.tasks:

@@ -97,11 +97,23 @@ def test_work_strategy_keeps_the_original_prompts(tmp_path: Path) -> None:
     assert isinstance(strategy, ModeStrategy)
     assert strategy.requires_prefab is True
     assert strategy.prepare is None
-    assert strategy.validate_tasks is None
+    assert strategy.validate_tasks is not None
     assert strategy.analyze_prompt(context) == analyze_prompt(context)
     task = _task()
     assert strategy.implement_prompt(context, task, False) == implement_prompt(context, task, False)
     assert strategy.document_prompt(context) == document_prompt(context)
+
+
+def test_work_strategy_only_checks_dependencies(tmp_path: Path) -> None:
+    context = _context(tmp_path, mode="work")
+    strategy = strategy_for("work", context)
+    assert strategy.validate_tasks is not None
+    ok = _task_file(_task(depends_on=[]))
+    broken = _task_file(_task(slice=None), _task(id="T2", depends_on=["nope"]))
+    assert strategy.validate_tasks(ok, context) == []
+    errors = strategy.validate_tasks(broken, context)
+    assert any("不存在" in item for item in errors)
+    assert not any("slice" in item for item in errors)
 
 
 def test_unknown_mode_is_rejected(tmp_path: Path) -> None:
@@ -144,7 +156,6 @@ def test_work_analyze_prompt_asks_for_the_gap_analysis(tmp_path: Path) -> None:
     assert "停下等补齐" in prompt
     assert "非阻断项不打断流程" in prompt
 
-
 def test_analyze_prompt_lists_hooks_and_new_rule(tmp_path: Path) -> None:
     _write_plan(tmp_path)
     prompt = indie_analyze_prompt(_context(tmp_path))
@@ -173,6 +184,15 @@ def test_implement_prompt_keeps_the_slice_on_the_framework(tmp_path: Path) -> No
     assert "不要为这一个切片另造一套" in prompt
 
 
+def test_implement_prompt_only_carries_the_task_hooks(tmp_path: Path) -> None:
+    _write_plan(tmp_path)
+    prompt = indie_implement_prompt(_context(tmp_path), _task(), False)
+    assert "本任务挂载" in prompt
+    assert "EventBus" in prompt
+    assert "功能放 Features/" in prompt
+    assert "核心系统：" not in prompt
+
+
 def test_implement_prompt_marks_retry(tmp_path: Path) -> None:
     prompt = indie_implement_prompt(_context(tmp_path, framework_enabled=False), _task(blocked_reason="缺格子数据"), True)
     assert "只修补这一项" in prompt
@@ -192,6 +212,14 @@ def test_document_prompt_requires_extension_guidance(tmp_path: Path) -> None:
 def test_validate_accepts_known_hooks(tmp_path: Path) -> None:
     _write_plan(tmp_path)
     assert validate_indie_tasks(_task_file(_task()), _context(tmp_path)) == []
+
+
+def test_validate_indie_requires_slice_names(tmp_path: Path) -> None:
+    _write_plan(tmp_path)
+    context = _context(tmp_path)
+    assert validate_indie_tasks(_task_file(_task()), context) == []
+    errors = validate_indie_tasks(_task_file(_task(slice=None)), context)
+    assert any("slice" in item for item in errors)
 
 
 def test_validate_rejects_missing_or_unknown_hooks(tmp_path: Path) -> None:

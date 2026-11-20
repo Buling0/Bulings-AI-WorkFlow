@@ -13,16 +13,24 @@ import sys
 from bulings.framework import (
     NEW_HOOK_PREFIX,
     FrameworkPlan,
+    framework_doc_problems,
     framework_drift,
+    framework_path_findings,
     framework_ready,
     hook_aliases,
     known_hooks,
     plan_summary,
     read_framework_plan,
+    task_framework_brief,
 )
 from bulings.modes.base import INDIE_SKILL_DIR, ModeEnv, ModeStrategy
 from bulings.prompts import PromptContext
-from bulings.tasks import FeatureTask, TaskFile
+from bulings.tasks import (
+    FeatureTask,
+    TaskFile,
+    validate_slice_names,
+    validate_task_dependencies,
+)
 
 SKILL = INDIE_SKILL_DIR
 
@@ -68,11 +76,12 @@ def _paradigm_line(context: PromptContext) -> str:
     )
 
 
-def _framework_lines(context: PromptContext) -> list[str]:
+def _framework_lines(context: PromptContext, brief: str = "") -> list[str]:
     if not context.framework_enabled:
         return ["框架基线：已关闭（--no-framework 或 indie.framework.enabled 为 false）。"]
-    if context.framework_summary:
-        return [f"框架基线（来自 {context.framework_plan_path}）：", context.framework_summary]
+    summary = brief or context.framework_summary
+    if summary:
+        return [f"框架基线（来自 {context.framework_plan_path}）：", summary]
     return [f"框架基线：还没有（{context.framework_plan_path} 待建立）。"]
 
 
@@ -160,13 +169,9 @@ def indie_analyze_prompt(context: PromptContext) -> str:
         "同一能力的任务用同一个 slice 名；dependsOn 写真实前置。",
         _protected_line(context.protected_paths),
         "不要创建 git commit。不要修改 .meta 的 guid。不要启动 Unity 批处理编译。",
-        "拆切片的第一步是 Skill 里的「缺失分析」：分四类找缺什么——策划（策划案和配置补充）、后端（数据字段和协议号）、"
-        "美术（预制体、场景、素材和需求不符或缺失）、前端（显示逻辑不清晰）。",
-        "缺了就没法按策划实现、或实现出来一定和策划不一致的，算阻断：对应任务 status 写 blocked，"
-        "blockedReason 以类别开头，写清缺什么、要谁补。可以先用保守做法落地的算非阻断：任务照常 pending，"
-        "记进开发说明的「缺失与待补齐」。拿不准的按阻断处理。",
-        "只要有阻断项，就在分析结束时按四类向开发者汇报并停下等补齐，不要继续实现，也不要用占位实现冒充完成。"
-        "非阻断项不打断流程，等所有切片做完再汇总一次。",
+        "拆切片的第一步是 Skill 的「缺失分析」：按策划 / 后端 / 美术 / 前端四类找缺什么。",
+        "阻断项（缺了就没法按策划实现）让对应任务 status 写 blocked、blockedReason 以类别开头；非阻断项先用保守做法，记进「缺失与待补齐」。"
+        "有阻断项就按四类汇报并停下等补齐，别用占位实现冒充完成。",
         "tasks.json 的 status 只能是 pending、in_progress、done、blocked；至少一项任务；id 不要重复。",
         "策划、工程或数据对不上时，不要脑补：该项 status 为 blocked，并写 blockedReason。",
     ]
@@ -186,6 +191,11 @@ def indie_implement_prompt(context: PromptContext, task: FeatureTask, retry: boo
         dev_spec = "不要生成开发说明。"
     acceptance = "；".join(task.acceptance) or "与目标一致"
     hooks = "、".join(task.framework) or "未写"
+    plan = _load_plan(context)
+    if plan is not None:
+        brief = task_framework_brief(plan, task.framework, context.framework_doc_path)
+    else:
+        brief = ""
     lines = [
         f"先阅读 {_skill('SKILL.md')}，只执行其中的「实现一个切片」阶段。",
         f"本轮只实现任务 {task.id}：{task.title}。不要开始下一个任务，不要写功能说明。",
@@ -198,7 +208,7 @@ def indie_implement_prompt(context: PromptContext, task: FeatureTask, retry: boo
         f"任务文件：{context.tasks_path}",
         dev_spec,
         "",
-        *_framework_lines(context),
+        *_framework_lines(context, brief),
         "",
         "优先复用已有的框架扩展点，不要为这一个切片另造一套事件系统、状态机或配置读取。",
     ]
@@ -254,7 +264,8 @@ def validate_indie_tasks(task_file: TaskFile, context: PromptContext) -> list[st
             "先补齐框架阶段，或确认后用 --no-framework 关闭框架要求再跑。",
         ]
     hooks = hook_aliases(plan) if plan is not None else ""
-    errors: list[str] = []
+    errors: list[str] = list(validate_slice_names(task_file.tasks))
+    errors.extend(validate_task_dependencies(task_file.tasks))
     for task in task_file.tasks:
         entries = [entry.strip() for entry in task.framework if entry.strip()]
         if not entries:
@@ -281,10 +292,9 @@ def prepare(env: ModeEnv) -> int:
     plan_path = _absolute(env.project_root, context.framework_plan_path)
     plan = read_framework_plan(plan_path)
     if framework_ready(plan):
-        drift = framework_drift(plan, env.project_root) if plan is not None else []
-        if drift:
-            print("[框架] 登记的文件在磁盘上找不到，先提示：" + "、".join(drift), file=sys.stderr)
-        return 0
+        if plan is None:
+            return 0
+        return _report_framework_findings(context, plan, env.project_root, hard_doc_check=context.framework_doc_enabled)
 
     draft_summary = plan_summary(plan) if plan is not None else ""
     drift = framework_drift(plan, env.project_root) if plan is not None else []
@@ -300,7 +310,37 @@ def prepare(env: ModeEnv) -> int:
             file=sys.stderr,
         )
         return 2
-    print(f"[框架] 完成：{context.framework_plan_path}", file=sys.stderr)
+    assert plan is not None
+    return _report_framework_findings(context, plan, env.project_root, hard_doc_check=context.framework_doc_enabled)
+
+
+def _report_framework_findings(
+    context: PromptContext,
+    plan: FrameworkPlan,
+    project_root: str,
+    hard_doc_check: bool,
+) -> int:
+    """框架文档是硬要求（可配置关闭），其它问题只提示。"""
+    doc_path = _absolute(project_root, context.framework_doc_path) if context.framework_doc_path else ""
+    if hard_doc_check and doc_path:
+        problems = framework_doc_problems(plan, doc_path)
+        if problems:
+            for item in problems:
+                print(item, file=sys.stderr)
+            print(
+                "框架阶段结束但没有可用的框架文档，已停止，未进入功能代码。"
+                "补齐文档，或把 indie.framework.docEnabled 设为 false 再继续。",
+                file=sys.stderr,
+            )
+            return 2
+    findings = [
+        item
+        for item in framework_path_findings(plan, project_root, doc_path)
+        if not (hard_doc_check and item.startswith("框架文档"))
+    ]
+    for item in findings:
+        print(f"[框架] 提示：{item}", file=sys.stderr)
+    print(f"[框架] 就绪：{context.framework_plan_path}", file=sys.stderr)
     return 0
 
 

@@ -13,11 +13,15 @@ HELP_TEXT = """用法
   bulings init --project <Unity工程>
   bulings design --project <Unity工程> --idea <灵感文件或一段文字> [--name <策划案名>] [--model <模型>]
   bulings design --project <Unity工程> --name <策划案名> --decide <选项id>[,<选项id>] [--note "补充想法"] [--model <模型>]
-  bulings design --project <Unity工程> --name <策划案名> --finish
+  bulings design --project <Unity工程> --name <策划案名> --finish [--force]
+  bulings design --project <Unity工程> --name <策划案名> --history [--json]
   bulings run --project <Unity工程> --design <策划案> [--prefab <预制体> ...] [--name <功能名>] [--dev-spec <路径>] [--feature-doc <路径>] [--no-dev-spec] [--no-feature-doc] [--no-framework] [--model <模型>]
   bulings split --project <Unity工程> --design <策划案> [--name <功能名>] [--output <路径>] [--model <模型>]
   bulings kb --project <Unity工程> --action <init|update|check> [--name <功能名>] [--model <模型>]
   bulings resume --project <Unity工程> --run <slug>
+  bulings status --project <Unity工程> [--json]
+  bulings doctor --project <Unity工程>
+  bulings audit --project <Unity工程> [--json]
 
 模式
   workflow.yaml 的 mode: work 时按任务清单做功能，至少要给一个 --prefab。
@@ -26,14 +30,21 @@ HELP_TEXT = """用法
 
 策划案迭代（仅 mode: indie）
   --idea 起第一轮，之后用 --decide 选选项、--note 补充想法，--finish 定稿。
-  不带 --idea/--decide/--note/--finish 时只打印当前进度和可选选项。
+  --finish 要求四个维度都确认，确实要放行加 --force。
+  --history 回看每轮的选项和选择（不启动 Agent，加 --json 输出机器可读结果）。
+  不带 --idea/--decide/--note/--finish/--history 时只打印当前进度和可选选项。
+
+只读命令
+  status  一屏看完策划案、框架、运行和下一步（--json 输出机器可读结果）。
+  doctor  检查工程、workflow.yaml、Skill、密钥、Unity MCP 和框架状态。
+  audit   看工作区改动有没有碰 protectedPaths、.meta 或 codeRoots 之外的文件。
 
 环境变量
   CURSOR_API_KEY   Cursor 用户 API key
 
 退出码
   0  完成
-  1  未能启动（参数、配置、密钥或 CursorAgentError）
+  1  未能启动（参数、配置、密钥或 CursorAgentError）；doctor 有 FAIL；audit 有错误级问题
   2  已开始但没有完成（Agent 失败、任务阻塞，或 tasks.json / framework.json / design.json 不合法）"""
 
 
@@ -69,6 +80,9 @@ class ParsedArgs:
     decide: str | None = None
     note: str | None = None
     finish: bool = False
+    force: bool = False
+    history: bool = False
+    json: bool = False
     help: bool = False
 
 
@@ -122,6 +136,12 @@ def dispatch(argv: list[str]) -> int:
         return kb_command(args, project)
     if args.command == "resume":
         return resume_command(args, project)
+    if args.command == "status":
+        return status_command(args, project)
+    if args.command == "doctor":
+        return doctor_command(args, project)
+    if args.command == "audit":
+        return audit_command(args, project)
 
     print(f"未知命令: {args.command}", file=sys.stderr)
     print_help()
@@ -170,8 +190,8 @@ def run_command(args: ParsedArgs, project: str) -> int:
 
 
 def design_command(args: ParsedArgs, project: str) -> int:
-    if not (args.idea or args.decide or args.note or args.finish or args.name):
-        print("至少给 --idea <灵感文件或文字>、--name <策划案名> 或 --decide <选项 id> 其中之一", file=sys.stderr)
+    if not (args.idea or args.decide or args.note or args.finish or args.history or args.name):
+        print("至少给 --idea <灵感文件或文字>、--name <策划案名>、--history 或 --decide <选项 id> 其中之一", file=sys.stderr)
         return 1
     from bulings.runner import DesignCommand, design_workflow
 
@@ -183,6 +203,9 @@ def design_command(args: ParsedArgs, project: str) -> int:
             decide=args.decide,
             note=args.note,
             finish=args.finish,
+            force=args.force,
+            history=args.history,
+            json=args.json,
             model=args.model,
         )
     )
@@ -217,6 +240,24 @@ def resume_command(args: ParsedArgs, project: str) -> int:
     return resume_workflow(ResumeCommand(project=project, slug=args.run))
 
 
+def status_command(args: ParsedArgs, project: str) -> int:
+    from bulings.runner import StatusCommand, status_workflow
+
+    return status_workflow(StatusCommand(project=project, as_json=args.json))
+
+
+def doctor_command(args: ParsedArgs, project: str) -> int:
+    from bulings.runner import DoctorCommand, doctor_workflow
+
+    return doctor_workflow(DoctorCommand(project=project))
+
+
+def audit_command(args: ParsedArgs, project: str) -> int:
+    from bulings.runner import AuditCommand, audit_workflow
+
+    return audit_workflow(AuditCommand(project=project, json=args.json))
+
+
 def parse_args(argv: list[str]) -> ParsedArgs:
     parser = _build_parser()
     namespace = parser.parse_args(argv)
@@ -241,6 +282,9 @@ def parse_args(argv: list[str]) -> ParsedArgs:
         decide=namespace.decide,
         note=namespace.note,
         finish=namespace.finish,
+        force=namespace.force,
+        history=namespace.history,
+        json=namespace.json,
         help=namespace.help,
     )
 
@@ -251,7 +295,11 @@ def print_help() -> None:
 
 def _build_parser() -> BulingsParser:
     parser = BulingsParser(prog="bulings", add_help=False, allow_abbrev=False)
-    parser.add_argument("command", nargs="?", choices=["init", "run", "design", "split", "kb", "resume"])
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["init", "run", "design", "split", "kb", "resume", "status", "doctor", "audit"],
+    )
     parser.add_argument("--help", "-h", action="store_true")
     parser.add_argument("--project")
     parser.add_argument("--design")
@@ -266,6 +314,9 @@ def _build_parser() -> BulingsParser:
     parser.add_argument("--decide")
     parser.add_argument("--note")
     parser.add_argument("--finish", action="store_true")
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--history", action="store_true")
+    parser.add_argument("--json", dest="json", action="store_true")
     parser.add_argument("--no-dev-spec", action="store_true")
     parser.add_argument("--no-feature-doc", action="store_true")
     parser.add_argument("--no-framework", action="store_true")

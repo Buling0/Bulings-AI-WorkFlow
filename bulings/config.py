@@ -79,6 +79,7 @@ class FrameworkConfig:
     plan: str = DEFAULT_FRAMEWORK_PLAN
     doc: str = DEFAULT_FRAMEWORK_DOC
     paradigm: str = ""
+    doc_enabled: bool = True
 
 
 @dataclass
@@ -125,6 +126,7 @@ class ResolvedRunConfig:
     framework_enabled: bool = False
     framework_plan_path: str = ""
     framework_doc_path: str = ""
+    framework_doc_enabled: bool = True
 
 
 def workflow_file(project_root: str | os.PathLike[str]) -> Path:
@@ -185,6 +187,7 @@ def merge_config(raw: object) -> WorkflowConfig:
             plan=_non_empty_string(framework.get("plan"), DEFAULT_FRAMEWORK_PLAN),
             doc=_non_empty_string(framework.get("doc"), DEFAULT_FRAMEWORK_DOC),
             paradigm=_as_string(framework.get("paradigm")),
+            doc_enabled=_as_boolean(framework.get("docEnabled"), True),
         ),
         design=DesignConfig(
             path=_non_empty_string(design.get("path"), DEFAULT_GDD),
@@ -258,6 +261,7 @@ def resolve_run_config(
         framework_enabled=config.framework.enabled and not overrides.no_framework,
         framework_plan_path=resolve_template(config.framework.plan, {"feature": token, "game": game}, project_root),
         framework_doc_path=resolve_template(config.framework.doc, {"feature": token, "game": game}, project_root),
+        framework_doc_enabled=config.framework.doc_enabled,
     )
 
 

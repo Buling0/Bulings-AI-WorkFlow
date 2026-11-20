@@ -159,6 +159,7 @@ def validate_round(
     current: GddPlan,
     decided: list[str],
     min_options: int = MIN_ROUND_OPTIONS,
+    note_given: bool = False,
 ) -> list[str]:
     """这一轮有没有真的推进。返回空列表表示通过。"""
     errors: list[str] = []
@@ -172,8 +173,11 @@ def validate_round(
         if current.round != expected:
             errors.append(f"这一轮应该写 round {expected}，现在是 {current.round}（每一轮只能推进一格）")
 
+    entry = next((item for item in current.chosen if item.round == current.round), None)
+    if (decided or note_given) and entry is None:
+        errors.append(f"这一轮的选择没有记进 chosen：缺少 round {current.round} 的记录")
     if decided:
-        recorded = {item for decision in current.chosen for item in decision.ids}
+        recorded = {item for decision in current.chosen if decision.round == current.round for item in decision.ids}
         missing = [item for item in decided if item not in recorded]
         if missing:
             errors.append("开发者选的选项没有写进 chosen：" + "、".join(missing))
@@ -187,6 +191,36 @@ def validate_round(
     elif current.options:
         errors.append("status 是 done 时不该再给新选项，options 需要清空")
     return errors
+
+
+def finish_dimension_errors(plan: GddPlan) -> list[str]:
+    """定稿轮要求四个维度都确认过。返回空列表表示可以定稿。"""
+    pending = pending_dimensions(plan)
+    if not pending:
+        return []
+    names = "、".join(dimension_title(name) for name in pending)
+    return [f"定稿前四个维度都要确认，还没确认：{names}（确实要放行加 --force）"]
+
+
+def is_finished(plan: GddPlan | None) -> bool:
+    """策划案是不是已经定稿（四个维度都确认）。"""
+    return plan is not None and plan.status == "done" and not pending_dimensions(plan)
+
+
+def design_round_snapshot_path(project_root: str | Path, slug: str, round_no: int) -> Path:
+    """每轮 design.json 的快照位置，用于回看决策历史。"""
+    return design_dir(project_root, slug) / "rounds" / f"{round_no}.json"
+
+
+def write_design_snapshot(project_root: str | Path, slug: str, round_no: int, content: str) -> Path | None:
+    """把这一轮的 design.json 原文留一份。写不了就不留，不影响主流程。"""
+    path = design_round_snapshot_path(project_root, slug, round_no)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8", newline="\n")
+    except OSError:
+        return None
+    return path
 
 
 def stage_title(stage: str) -> str:
@@ -255,20 +289,25 @@ def gdd_summary(plan: GddPlan | None) -> str:
     return plan_summary(plan)
 
 
-def plan_status_lines(plan: GddPlan) -> list[str]:
+def plan_status_lines(plan: GddPlan, suggested_rounds: int = 0) -> list[str]:
     """命令行打印的进度与选项。"""
     marks = "、".join(
         f"{dimension_title(name)}{'已确认' if plan.dimensions[name].confirmed else '待定'}" for name in DIMENSIONS
     )
     done = len(covered_dimensions(plan))
+    round_part = f"第 {plan.round} 轮" + (f"（建议 {suggested_rounds} 轮）" if suggested_rounds > 0 else "")
     lines = [
-        f"进度：第 {plan.round} 轮 · 阶段 {stage_title(plan.stage)} · 状态 {plan.status}"
+        f"进度：{round_part} · 阶段 {stage_title(plan.stage)} · 状态 {plan.status}"
         f"（已确认 {done}/{len(DIMENSIONS)} 个维度）",
         f"维度：{marks}",
     ]
     if plan.options:
         lines.append("本轮选项（用 --decide 选，逗号分隔可多选）：")
         lines.extend(option_lines(plan))
+    if suggested_rounds > 0 and plan.round >= suggested_rounds and plan.status != "done":
+        lines.append(f"已到建议轮次（{suggested_rounds} 轮），可以考虑 --finish 定稿。")
+    if plan.status == "done":
+        lines.append("已定稿。要改方向请用 --note 补充，或换一个 --name 重开。")
     return lines
 
 

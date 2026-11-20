@@ -90,6 +90,18 @@ bulings resume --project <Unity工程> --run <功能名>
 
 例外是分析阶段：这时出现的 `blocked` 任务就是缺失分析判定的阻断项，命令直接退出 `2`、按类别列出来，不进入写代码。补齐后 `resume`，`blocked` 任务会改回 `in_progress` 重做。非阻断的缺失不拦流程，写进开发说明和功能说明的「缺失与待补齐」，并在流程结束时汇总告知。
 
+## 只读命令
+
+```powershell
+bulings status --project <Unity工程> [--json]
+bulings doctor --project <Unity工程>
+bulings audit --project <Unity工程> [--json]
+```
+
+- `status`：一屏看完策划案（轮次 / 是否定稿 / 维度确认数）、框架（是否就绪、系统与扩展点、漂移）、所有运行（阶段、任务完成数、阻断项），并给出下一步建议。
+- `doctor`：逐项检查 `[OK]/[WARN]/[FAIL]`——Unity 工程、`workflow.yaml`、Skill、`CURSOR_API_KEY`、Unity MCP 可达性、框架状态。有 `FAIL` 时退出 `1`。
+- `audit`：用 `git status` 看工作区改动，报三类风险：命中 `protectedPaths`（错误级，退出 `1`）、动了 `.meta`（警告）、改动落在 `codeRoots` 之外（提示）。不是 git 仓库时跳过。
+
 ## 独游模式
 
 `workflow.yaml` 写 `mode: indie` 就用独游流程。它比工作模式多两道阶段：先是**策划案迭代**（`bulings design`，见下一节），然后是 **run 里的框架阶段**：
@@ -103,15 +115,16 @@ bulings resume --project <Unity工程> --run <功能名>
 bulings run --project <Unity工程> --design <策划案> [--name <功能名>]
 ```
 
-- 框架清单 `.bulings/indie/framework.json`（工程级，Agent 写、工作流校验）；框架文档默认 `Docs/AI/Frameworks/<工程目录名>.md`。
+- 框架清单 `.bulings/indie/framework.json`（工程级，Agent 写、工作流校验）；框架文档默认 `Docs/AI/Frameworks/<工程目录名>.md`，框架阶段结束时会检查它真的写出来了（`indie.framework.docEnabled: false` 可关闭这项要求）。
 - 框架没写好（不存在、不合法，或 `status` 仍是 `draft`）时命令退出 2，不进入功能代码。
-- 已经有可用框架时直接进分析和实现，只对登记过但磁盘上找不到的路径打警告。
+- 已经有可用框架时直接进分析和实现，只对登记过但磁盘上找不到的路径打警告（`root` 也参与检查；路径必须是相对工程根的）。
 - `--no-framework` 或 `indie.framework.enabled: false` 跳过框架阶段，切片仍然要写 `new:` 登记扩展点。
 - 切片引用了框架里不存在的挂载点时，在写代码前就停下，并列出可用挂载点。
 - 拆切片时发现阻断性缺失（规则没定、缺数据字段、缺资源节点、显示逻辑说不清）时同样停在分析阶段，按类别列出来等补齐。
+- 每项任务都要写 `slice`；`dependsOn` 指向不存在的 id、自依赖或成环，都会在写代码前报错。
 - 独游模式下 `bulings split` 会拒绝执行；`bulings kb` 可以照常用。
 
-框架选型、最小基线、反模式和产物格式见 [docs/独游模式说明.md](docs/独游模式说明.md)，装进工程的规则在 `.cursor/skills/indie-feature/`。
+框架选型、最小基线、反模式和产物格式见 [docs/独游模式说明.md](docs/独游模式说明.md)，装进工程的规则在 `.cursor/skills/indie-feature/`。这一轮补的校验和只读命令（策划案留痕、框架文档检查、切片依赖校验、`status` / `doctor` / `audit`）的需求与验收标准见 [docs/独游模式需求补充.md](docs/独游模式需求补充.md)。
 
 ## 策划案迭代
 
@@ -121,13 +134,16 @@ bulings run --project <Unity工程> --design <策划案> [--name <功能名>]
 bulings design --project <Unity工程> --idea <灵感文件或一段文字> [--name <策划案名>]
 bulings design --project <Unity工程> --name <策划案名> --decide G1[,S2]
 bulings design --project <Unity工程> --name <策划案名> --note "想再休闲一点"
-bulings design --project <Unity工程> --name <策划案名> --finish
+bulings design --project <Unity工程> --name <策划案名> --finish [--force]
+bulings design --project <Unity工程> --name <策划案名> --history [--json]
 ```
 
-- 每轮结束会把当前选项和「下一步该敲什么」打印出来；不带参数再跑一次可以只看进度。
+- 每轮结束会把当前选项和「下一步该敲什么」打印出来；不带参数再跑一次可以只看进度（含建议轮次，到了会提示可以 `--finish`）。
 - `--idea` 既可以是文件路径，也可以直接是一段文字（这时要给 `--name`）。
 - 选项 id 用阶段字母加序号：玩法 `G1`、剧情 `S1`、风格 `A1`、流程 `F1`。选了不存在的 id 会直接拒绝并列出可用选项。
-- 工作流会校验这一轮真的推进了：`round` 必须是上一轮 +1、迭代中的一轮至少 2 个选项、选过的 id 必须写进 `chosen`、定稿时 `status` 必须是 `done` 且不再给选项。
+- 工作流会校验这一轮真的推进了：`round` 必须是上一轮 +1、迭代中的一轮至少 2 个选项、带 `--decide` / `--note` 的那一轮必须在 `chosen` 里留下记录、选过的 id 必须记到本轮、定稿时 `status` 必须是 `done` 且不再给选项。
+- 定稿要求四个维度都确认，确实要放行加 `--force`；每轮都会检查策划案正文有没有真的更新，没变会警告（不阻断）。
+- `--history` 列出每轮的阶段、选项和选择；每轮结束都会把 `design.json` 快照到 `.bulings/design/<策划案名>/rounds/<轮次>.json`。
 - 定稿后打印 `bulings run --design` 的下一步命令，直接进入框架和功能开发。
 
 产物：设计状态 `.bulings/design/<策划案名>/design.json`、灵感原文同目录 `brief.md`、策划案正文默认 `Docs/AI/GameDesigns/<策划案名>.md`。规则在 `.cursor/skills/indie-design/`。
@@ -192,6 +208,7 @@ indie:
     enabled: true
     plan: .bulings/indie/framework.json
     doc: Docs/AI/Frameworks/{game}.md   # {game} 取工程目录名
+    docEnabled: true   # false 时不要求写框架文档
     paradigm: ""       # 留空由 Agent 按 frameworks.md 选型
   design:               # 仅 mode: indie 时使用，bulings design 的配置
     path: Docs/AI/GameDesigns/{feature}.md
@@ -222,7 +239,7 @@ project:
 ## 退出码
 
 - `0`：完成
-- `1`：没有启动（参数、配置、密钥，或启动 Agent 失败）
+- `1`：没有启动（参数、配置、密钥，或启动 Agent 失败）；`doctor` 有 `FAIL`；`audit` 有错误级问题
 - `2`：已经启动但没有做完（这一轮失败或被取消、任务阻塞，或 `tasks.json` / `framework.json` / `design.json` 不合法）
 
 ## 本版本不做的事

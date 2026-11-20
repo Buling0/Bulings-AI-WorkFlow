@@ -9,6 +9,9 @@ from bulings.tasks import (
     read_task_file,
     reopen_blocked_task,
     select_next_task,
+    unmet_dependencies,
+    validate_slice_names,
+    validate_task_dependencies,
     write_task_file,
 )
 
@@ -105,6 +108,38 @@ def test_in_progress_is_retried() -> None:
     assert nxt.task is not None
     assert nxt.task.id == "T2"
     assert nxt.retry is True
+
+
+def test_rejects_broken_dependency_graphs() -> None:
+    missing = [FeatureTask("T1", "t", "g", ["T9"], [], [], [], "pending")]
+    assert any("T9" in item and "不存在" in item for item in validate_task_dependencies(missing))
+
+    self_dep = [FeatureTask("T1", "t", "g", ["T1"], [], [], [], "pending")]
+    assert any("依赖了自己" in item for item in validate_task_dependencies(self_dep))
+
+    cycle = [
+        FeatureTask("T1", "t", "g", ["T2"], [], [], [], "pending"),
+        FeatureTask("T2", "t", "g", ["T1"], [], [], [], "pending"),
+    ]
+    errors = validate_task_dependencies(cycle)
+    assert any("成环" in item for item in errors)
+
+    ok = [
+        FeatureTask("T1", "t", "g", [], [], [], [], "pending"),
+        FeatureTask("T2", "t", "g", ["T1"], [], [], [], "pending"),
+    ]
+    assert validate_task_dependencies(ok) == []
+
+
+def test_slice_names_and_unmet_dependencies() -> None:
+    with_slice = FeatureTask("T1", "t", "g", [], [], [], [], "pending", slice="放置炮塔")
+    without_slice = FeatureTask("T2", "t", "g", [], [], [], [], "pending")
+    assert validate_slice_names([with_slice]) == []
+    assert any("T2" in item for item in validate_slice_names([with_slice, without_slice]))
+
+    done = FeatureTask("T1", "t", "g", [], [], [], [], "done")
+    waiting = FeatureTask("T2", "t", "g", ["T1", "T3"], [], [], [], "pending")
+    assert unmet_dependencies(waiting, [done, waiting]) == ["T3"]
 
 
 def test_mutual_dependencies_wait() -> None:

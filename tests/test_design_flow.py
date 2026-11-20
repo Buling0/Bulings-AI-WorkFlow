@@ -114,10 +114,10 @@ def _doc_path(root: Path) -> Path:
     return root / "Docs" / "AI" / "GameDesigns" / f"{SLUG}.md"
 
 
-def _write_doc(root: Path) -> Path:
+def _write_doc(root: Path, round_no: int = 1) -> Path:
     doc = _doc_path(root)
     doc.parent.mkdir(parents=True, exist_ok=True)
-    doc.write_text("# 塔防 + 建造 策划案\n", encoding="utf-8")
+    doc.write_text(f"# 塔防 + 建造 策划案\n\n第 {round_no} 轮更新。\n", encoding="utf-8")
     return doc
 
 
@@ -135,10 +135,12 @@ def _round_writer(
     def on_send(prompt: str) -> None:
         match = re.search(r"这是第 (\d+) 轮", prompt)
         round_no = int(match.group(1)) if match else 1
+        confirmed = status == "done"
         payload = _plan(
             round=round_no,
             stage="done" if status == "done" else stage,
             status=status,
+            dimensions={name: _dimension("已定", confirmed) for name in DIMENSIONS},
             options=[_option("G1"), _option("G2")] if options is None else options,
             chosen=[{"round": round_no, "ids": chosen or []}],
         )
@@ -146,7 +148,7 @@ def _round_writer(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         if write_doc:
-            _write_doc(root)
+            _write_doc(root, round_no=round_no)
 
     return on_send
 
@@ -269,6 +271,112 @@ def test_note_alone_advances_the_round(tmp_path: Path, monkeypatch: pytest.Monke
 
     assert code == 0
     assert "想要更休闲一点" in factory.prompts[0]
+
+
+def test_note_round_without_chosen_record_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _setup(tmp_path)
+    _write_plan(tmp_path)
+
+    def forget(prompt: str) -> None:
+        # 推进了轮次，但没把这一轮的补充说明记进 chosen
+        payload = _plan(round=2, chosen=[])
+        path = design_plan_path(tmp_path, SLUG)
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _write_doc(tmp_path, round_no=2)
+
+    factory = FakeFactory(forget)
+    _use_agent(monkeypatch, factory)
+
+    code = runner.design_workflow(DesignCommand(project=str(tmp_path), name=SLUG, note="想更休闲"))
+
+    assert code == 2
+    assert "没有记进 chosen" in capsys.readouterr().err
+
+
+def test_round_without_doc_change_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _setup(tmp_path)
+    _write_plan(tmp_path)
+    factory = FakeFactory(_round_writer(tmp_path, chosen=["G1"], write_doc=False))
+    _use_agent(monkeypatch, factory)
+
+    code = runner.design_workflow(DesignCommand(project=str(tmp_path), name=SLUG, decide="G1"))
+
+    assert code == 0
+    assert "正文没更新" in capsys.readouterr().err
+
+
+def test_finish_requires_confirmed_dimensions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _setup(tmp_path)
+    _write_plan(tmp_path)
+    factory = FakeFactory(_round_writer(tmp_path, options=[], status="done"))
+    _use_agent(monkeypatch, factory)
+
+    def unconfirmed(prompt: str) -> None:
+        payload = _plan(round=2, stage="done", status="done", options=[])
+        path = design_plan_path(tmp_path, SLUG)
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _write_doc(tmp_path, round_no=2)
+
+    factory.on_send = unconfirmed
+
+    code = runner.design_workflow(DesignCommand(project=str(tmp_path), name=SLUG, finish=True))
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "还没确认" in err
+    assert "玩法" in err
+
+
+def test_finish_force_bypasses_dimension_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _setup(tmp_path)
+    _write_plan(tmp_path)
+    factory = FakeFactory(_round_writer(tmp_path, options=[], status="done"))
+    _use_agent(monkeypatch, factory)
+
+    def unconfirmed(prompt: str) -> None:
+        payload = _plan(round=2, stage="done", status="done", options=[])
+        path = design_plan_path(tmp_path, SLUG)
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        _write_doc(tmp_path, round_no=2)
+
+    factory.on_send = unconfirmed
+
+    code = runner.design_workflow(DesignCommand(project=str(tmp_path), name=SLUG, finish=True, force=True))
+
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "--force" in captured.err
+    assert "策划案已定稿" in captured.out
+
+
+def test_round_snapshots_and_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _setup(tmp_path)
+    _write_plan(tmp_path)
+    factory = FakeFactory(_round_writer(tmp_path, chosen=["G1"]))
+    _use_agent(monkeypatch, factory)
+
+    assert runner.design_workflow(DesignCommand(project=str(tmp_path), name=SLUG, decide="G1")) == 0
+
+    snapshot = tmp_path / ".bulings" / "design" / SLUG / "rounds" / "2.json"
+    assert snapshot.is_file()
+    capsys.readouterr()
+
+    code = runner.design_workflow(DesignCommand(project=str(tmp_path), name=SLUG, history=True))
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "第 2 轮" in out
+    assert "G1" in out
 
 
 def test_round_that_does_not_advance_is_rejected(
